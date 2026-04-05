@@ -16,6 +16,7 @@ COL_CLAN = 0        # Número do clã (ex: "5" → normalizado para "CLÃ 5")
 KEY_COLUMNS = [11]  # Token único de submissão
 
 GROUP_MODALIDADES = config.GROUP_MODALIDADES
+COL_PARTICIPANTES = config.COL_PARTICIPANTES_GROUP
 
 
 def _normalize_clan(clan_raw: str) -> str:
@@ -70,10 +71,15 @@ def _process_group_records(
 
     # 3. Inserir novos como status='pendente', pontos=0
     for record_hash, row in new_records:
+        raw_participantes = row[COL_PARTICIPANTES].strip() if COL_PARTICIPANTES < len(row) else ""
+        try:
+            num_participantes = max(1, int(raw_participantes))
+        except (ValueError, AttributeError):
+            num_participantes = 1
         _build_and_insert(
             record_hash, row, header, data_rows,
             pontos=0,
-            extra_fields={"status": "pendente"},
+            extra_fields={"status": "pendente", "num_participantes": num_participantes},
         )
 
     # 4. Retornar contagem atual de pendentes por clã (sem promover nada)

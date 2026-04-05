@@ -149,14 +149,32 @@ def list_clan_totals() -> list[dict]:
     return result.data
 
 
-def upsert_clan_total(clan: str, total: int) -> dict:
-    """Atualiza ou insere o total de pontos de um clã."""
+def upsert_clan_total(clan: str, total: int, pessoas_em_espera: int | None = None) -> dict:
+    """Atualiza ou insere o total de pontos de um clã.
+
+    Se pessoas_em_espera for informado, também atualiza o carry-over.
+    """
     client = _get_client()
+    payload: dict = {"clan": clan, "total_pontos": total}
+    if pessoas_em_espera is not None:
+        payload["pessoas_em_espera"] = pessoas_em_espera
     result = client.table(TABLE_TOTAIS).upsert(
-        {"clan": clan, "total_pontos": total},
+        payload,
         on_conflict="clan",
     ).execute()
     return result.data[0] if result.data else {}
+
+
+def get_clan_carry_over(clan: str) -> int:
+    """Retorna o carry-over (pessoas_em_espera) atual do clã. Default 0."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_TOTAIS)
+        .select("pessoas_em_espera")
+        .eq("clan", clan)
+        .execute()
+    )
+    return result.data[0]["pessoas_em_espera"] if result.data else 0
 
 
 def reset_all_totals() -> None:

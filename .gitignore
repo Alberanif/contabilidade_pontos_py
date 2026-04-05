@@ -1,0 +1,10 @@
+.env
+*.pyc
+__pycache__/
+venv/
+*.json
+!package.json
+!tsconfig.json
+node_modules/
+dist/
+.vite/

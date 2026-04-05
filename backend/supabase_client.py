@@ -174,7 +174,7 @@ def get_clan_carry_over(clan: str) -> int:
         .eq("clan", clan)
         .execute()
     )
-    return result.data[0]["pessoas_em_espera"] if result.data else 0
+    return result.data[0]["pessoas_em_espera"] or 0 if result.data else 0
 
 
 def reset_all_totals() -> None:

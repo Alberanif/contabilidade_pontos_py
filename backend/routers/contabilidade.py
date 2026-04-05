@@ -191,14 +191,17 @@ def aprovar_clan(body: AprovarClanRequest):
         )
 
         if n_complete == 0:
+            accumulated = carry_over + sum(r.get("num_participantes", 1) for r in pending)
+            current_total = supabase_client.get_clan_totals().get(clan, 0)
+            supabase_client.upsert_clan_total(clan, current_total, pessoas_em_espera=accumulated)
             return AprovarClanResponse(
                 clan=clan,
                 lotes_aprovados=0,
                 registros_promovidos=0,
                 pessoas_contabilizadas=0,
-                pessoas_em_espera=carry_over + sum(r.get("num_participantes", 1) for r in pending),
+                pessoas_em_espera=accumulated,
                 pontos_adicionados=0,
-                novo_total=supabase_client.get_clan_totals().get(clan, 0),
+                novo_total=current_total,
                 pendentes_restantes=len(pending),
                 mensagem=f"Nenhum lote completo disponível. {len(pending)} registro(s) ainda aguardando.",
             )

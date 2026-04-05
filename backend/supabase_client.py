@@ -97,7 +97,7 @@ def get_pending_group_records_by_clan(clan: str, modalidades: list[str]) -> list
     client = _get_client()
     result = (
         client.table(TABLE_REGISTROS)
-        .select("id, registro_hash, clan, modalidade, created_at")
+        .select("id, registro_hash, clan, modalidade, created_at, num_participantes")
         .eq("clan", clan)
         .eq("status", "pendente")
         .in_("modalidade", modalidades)

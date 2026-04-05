@@ -48,6 +48,27 @@ def compute_batch_promotions(
     return ids_to_promote, n_complete
 
 
+def compute_batch_promotions_by_people(
+    pending_records: list[dict],
+    pessoas_em_espera: int,
+    batch_size: int,
+) -> tuple[list[int], int, int]:
+    """Calcula lotes baseados em número de pessoas (não registros).
+
+    Soma os participantes de todos os registros pendentes com o carry-over
+    existente. Todos os registros pendentes são promovidos de uma vez.
+
+    Retorna (ids_para_promover, n_lotes_completos, novo_carry_over).
+    """
+    total_pessoas = pessoas_em_espera + sum(
+        r.get("num_participantes", 1) for r in pending_records
+    )
+    n_lotes = total_pessoas // batch_size
+    novo_carry_over = total_pessoas % batch_size
+    ids_to_promote = [r["id"] for r in pending_records]
+    return ids_to_promote, n_lotes, novo_carry_over
+
+
 def find_new_records(
     rows: list[list[str]],
     key_columns: list[int],

@@ -108,6 +108,8 @@ class AprovarClanResponse(BaseModel):
     clan: str
     lotes_aprovados: int
     registros_promovidos: int
+    pessoas_contabilizadas: int
+    pessoas_em_espera: int
     pontos_adicionados: int
     novo_total: int
     pendentes_restantes: int
@@ -180,11 +182,12 @@ def importar_registros():
 def aprovar_clan(body: AprovarClanRequest):
     """Aprova os lotes completos de grupo/empresa de um clã e contabiliza os pontos."""
     try:
-        # Normaliza o clã recebido para garantir consistência ("5" ou "CLÃ 5" → "CLÃ 5")
         clan = _normalize_clan(body.clan)
         pending = supabase_client.get_pending_group_records_by_clan(clan, GROUP_MODALIDADES)
-        ids_to_promote, n_complete = points_engine.compute_batch_promotions(
-            pending, config.BATCH_SIZE_GROUP
+        carry_over = supabase_client.get_clan_carry_over(clan)
+
+        ids_to_promote, n_complete, novo_carry_over = points_engine.compute_batch_promotions_by_people(
+            pending, carry_over, config.BATCH_SIZE_GROUP
         )
 
         if n_complete == 0:
@@ -192,22 +195,24 @@ def aprovar_clan(body: AprovarClanRequest):
                 clan=clan,
                 lotes_aprovados=0,
                 registros_promovidos=0,
+                pessoas_contabilizadas=0,
+                pessoas_em_espera=carry_over + sum(r.get("num_participantes", 1) for r in pending),
                 pontos_adicionados=0,
                 novo_total=supabase_client.get_clan_totals().get(clan, 0),
                 pendentes_restantes=len(pending),
                 mensagem=f"Nenhum lote completo disponível. {len(pending)} registro(s) ainda aguardando.",
             )
 
-        # Promover registros e atualizar Supabase
+        pessoas_contabilizadas = carry_over + sum(r.get("num_participantes", 1) for r in pending)
+
         supabase_client.promote_pending_to_contabilizado(
             ids_to_promote, config.POINTS_PER_RECORD_IN_BATCH
         )
         pontos_adicionados = n_complete * config.POINTS_PER_BATCH_GROUP
         current_totals = supabase_client.get_clan_totals()
         novo_total = current_totals.get(clan, 0) + pontos_adicionados
-        supabase_client.upsert_clan_total(clan, novo_total)
+        supabase_client.upsert_clan_total(clan, novo_total, pessoas_em_espera=novo_carry_over)
 
-        # Atualizar planilha de totais
         google_sheets_client.update_clan_totals({clan: pontos_adicionados})
 
         pendentes_restantes = len(pending) - len(ids_to_promote)
@@ -216,13 +221,16 @@ def aprovar_clan(body: AprovarClanRequest):
             clan=clan,
             lotes_aprovados=n_complete,
             registros_promovidos=len(ids_to_promote),
+            pessoas_contabilizadas=pessoas_contabilizadas,
+            pessoas_em_espera=novo_carry_over,
             pontos_adicionados=pontos_adicionados,
             novo_total=novo_total,
             pendentes_restantes=pendentes_restantes,
             mensagem=(
                 f"{n_complete} lote(s) aprovado(s) para {clan}. "
                 f"+{pontos_adicionados} pontos. "
-                f"Total agora: {novo_total} pts."
+                f"Total agora: {novo_total} pts. "
+                f"{novo_carry_over} pessoa(s) em espera."
             ),
         )
 

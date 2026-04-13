@@ -10,14 +10,15 @@ def listar_registros(
     clan: str | None = Query(None, description="Filtrar por clã"),
     modalidade: str | None = Query(None, description="Filtrar por modalidade"),
     status: str | None = Query(None, description="Filtrar por status: contabilizado | pendente"),
+    status_coach: str | None = Query(None, description="Filtrar por status do coach: contabilizado | pendente"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
     """Lista registros com filtros opcionais e paginação."""
     registros = supabase_client.list_registros(
-        clan=clan, modalidade=modalidade, status=status, limit=limit, offset=offset
+        clan=clan, modalidade=modalidade, status=status, status_coach=status_coach, limit=limit, offset=offset
     )
-    total = supabase_client.count_registros(clan=clan, modalidade=modalidade, status=status)
+    total = supabase_client.count_registros(clan=clan, modalidade=modalidade, status=status, status_coach=status_coach)
     return {
         "registros": registros,
         "total": total,

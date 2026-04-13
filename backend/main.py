@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import config  # noqa: F401 — valida variáveis de ambiente ao importar
-from routers import contabilidade, registros, clans
+from routers import contabilidade, registros, clans, coaches
 
 app = FastAPI(
     title="Calcula Pontos Ultimate",
@@ -21,6 +21,7 @@ app.add_middleware(
 app.include_router(contabilidade.router, prefix="/api/contabilidade", tags=["Contabilidade"])
 app.include_router(registros.router, prefix="/api/registros", tags=["Registros"])
 app.include_router(clans.router, prefix="/api/clans", tags=["Clãs"])
+app.include_router(coaches.router, prefix="/api/coaches", tags=["Coaches"])
 
 
 @app.get("/api/health")

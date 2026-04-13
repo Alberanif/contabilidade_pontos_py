@@ -4,6 +4,7 @@ import config
 
 TABLE_REGISTROS = "pontos_ultimate_registros_contabilizados"
 TABLE_TOTAIS = "pontos_ultimate_totais_por_clan"
+TABLE_TOTAIS_COACH = "pontos_ultimate_totais_por_coach"
 
 
 def _get_client() -> Client:
@@ -33,6 +34,7 @@ def list_registros(
     clan: str | None = None,
     modalidade: str | None = None,
     status: str | None = None,
+    status_coach: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
@@ -45,6 +47,8 @@ def list_registros(
         query = query.eq("modalidade", modalidade)
     if status:
         query = query.eq("status", status)
+    if status_coach:
+        query = query.eq("status_coach", status_coach)
     query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
     result = query.execute()
     return result.data
@@ -54,6 +58,7 @@ def count_registros(
     clan: str | None = None,
     modalidade: str | None = None,
     status: str | None = None,
+    status_coach: str | None = None,
 ) -> int:
     """Conta registros com filtros opcionais (clan, modalidade, status)."""
     client = _get_client()
@@ -64,6 +69,8 @@ def count_registros(
         query = query.eq("modalidade", modalidade)
     if status:
         query = query.eq("status", status)
+    if status_coach:
+        query = query.eq("status_coach", status_coach)
     result = query.execute()
     return result.count or 0
 
@@ -129,7 +136,47 @@ def get_all_pending_clans(modalidades: list[str]) -> list[str]:
         .in_("modalidade", modalidades)
         .execute()
     )
-    return list({row["clan"] for row in result.data})
+    return list({row["clan"] for row in result.data if row.get("clan")})
+
+
+def get_pending_group_records_by_coach(coach: str, modalidades: list[str]) -> list[dict]:
+    """Retorna todos os registros pendentes de grupo/empresa do coach em ordem FIFO."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .select("id, registro_hash, coach, clan, modalidade, created_at, num_participantes")
+        .eq("coach", coach)
+        .eq("status_coach", "pendente")
+        .in_("modalidade", modalidades)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return result.data
+
+
+def promote_pending_to_contabilizado_coach(record_ids: list[int], pontos_each: int) -> int:
+    """Atualiza os registros para status_coach=contabilizado e define pontos_coach. Retorna quantidade."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .update({"status_coach": "contabilizado", "pontos_coach": pontos_each})
+        .in_("id", record_ids)
+        .execute()
+    )
+    return len(result.data)
+
+
+def get_all_pending_coaches(modalidades: list[str]) -> list[str]:
+    """Retorna lista de coaches distintos que possuem ao menos 1 registro pendente nas modalidades."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .select("coach")
+        .eq("status_coach", "pendente")
+        .in_("modalidade", modalidades)
+        .execute()
+    )
+    return list({row["coach"] for row in result.data if row.get("coach")})
 
 
 # --- Totais por clã ---
@@ -181,3 +228,49 @@ def reset_all_totals() -> None:
     """Zera todos os totais dos clãs."""
     client = _get_client()
     client.table(TABLE_TOTAIS).delete().neq("id", 0).execute()
+    client.table(TABLE_TOTAIS_COACH).delete().neq("id", 0).execute()
+
+
+# --- Totais por Coach ---
+
+
+def get_coach_totals() -> dict[str, int]:
+    """Retorna {coach: total_pontos} de todos os coaches."""
+    client = _get_client()
+    result = client.table(TABLE_TOTAIS_COACH).select("*").execute()
+    return {row["coach"]: row["total_pontos"] for row in result.data}
+
+
+def list_coach_totals() -> list[dict]:
+    """Lista todos os coaches com totais como lista de dicts."""
+    client = _get_client()
+    result = client.table(TABLE_TOTAIS_COACH).select("*").order("total_pontos", desc=True).execute()
+    return result.data
+
+
+def upsert_coach_total(coach: str, total: int, pessoas_em_espera: int | None = None) -> dict:
+    """Atualiza ou insere o total de pontos de um coach.
+
+    Se pessoas_em_espera for informado, também atualiza o carry-over.
+    """
+    client = _get_client()
+    payload: dict = {"coach": coach, "total_pontos": total}
+    if pessoas_em_espera is not None:
+        payload["pessoas_em_espera"] = pessoas_em_espera
+    result = client.table(TABLE_TOTAIS_COACH).upsert(
+        payload,
+        on_conflict="coach",
+    ).execute()
+    return result.data[0] if result.data else {}
+
+
+def get_coach_carry_over(coach: str) -> int:
+    """Retorna o carry-over (pessoas_em_espera) atual do coach. Default 0."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_TOTAIS_COACH)
+        .select("pessoas_em_espera")
+        .eq("coach", coach)
+        .execute()
+    )
+    return result.data[0]["pessoas_em_espera"] or 0 if result.data else 0

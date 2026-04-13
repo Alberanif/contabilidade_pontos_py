@@ -746,23 +746,9 @@ def importar_inicial():
                     },
                 )
             pro_bono_importados = len(pb_records)
-
-            # Somar pontos Pro-bono nos totais já semeados de clãs e coaches
-            raw_pb_clan = points_engine.calculate_points_by_clan(
-                pb_records, COL_CLAN, config.POINTS_PER_PRO_BONO
-            )
-            raw_pb_coach = points_engine.calculate_points_by_coach(
-                pb_records, COL_COACH, config.POINTS_PER_PRO_BONO
-            )
-
-            current_clan_totals = supabase_client.get_clan_totals()
-            for raw_clan, pts in raw_pb_clan.items():
-                clan = _normalize_clan(raw_clan)
-                supabase_client.upsert_clan_total(clan, current_clan_totals.get(clan, 0) + pts)
-
-            current_coach_totals = supabase_client.get_coach_totals()
-            for coach, pts in raw_pb_coach.items():
-                supabase_client.upsert_coach_total(coach, current_coach_totals.get(coach, 0) + pts)
+            # Os totais já foram semeados a partir da planilha de ranking (Fases 6 e 7).
+            # Não somamos pontos Pro-bono aqui — os registros são apenas marcados como
+            # contabilizados para que executar() não os reprocesse futuramente.
 
         partes = [
             f"{registros_removidos} registros removidos",

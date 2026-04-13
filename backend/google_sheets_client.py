@@ -29,6 +29,28 @@ def fetch_records() -> list[list[str]]:
     return result.get("values", [])
 
 
+def fetch_records_pro_bono() -> list[list[str]]:
+    """Busca todas as linhas da planilha de registros Pro-bono.
+
+    Retorna lista vazia se as variáveis de ambiente da planilha Pro-bono
+    não estiverem configuradas.
+    """
+    if not config.GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID:
+        return []
+    service = _get_service()
+    sheet_name = f"'{config.GSHEET_RECORDS_PRO_BONO_SHEET_NAME}'"
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=config.GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID,
+            range=sheet_name,
+        )
+        .execute()
+    )
+    return result.get("values", [])
+
+
 def fetch_ranking() -> list[dict]:
     """Lê a seção PONTUAÇÃO GERAL (colunas I-L) e retorna o ranking dos clãs.
 
@@ -89,6 +111,65 @@ def fetch_totals() -> list[list[str]]:
         .execute()
     )
     return result.get("values", [])
+
+
+def sync_clan_totals_to_sheet(totals: dict[str, int]) -> dict[str, int]:
+    """Sobrescreve a seção PONTUAÇÃO GERAL com os valores absolutos do banco.
+
+    Diferente de update_clan_totals (que incrementa), esta função escreve
+    diretamente o valor total sem somar ao valor atual da planilha.
+
+    Retorna o dicionário {clan: total_escrito} após a atualização.
+    """
+    service = _get_service()
+    sheet_name = f"'{config.GSHEET_TOTALS_SHEET_NAME}'"
+
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=config.GSHEET_TOTALS_SPREADSHEET_ID,
+            range=sheet_name,
+        )
+        .execute()
+    )
+    rows = result.get("values", [])
+
+    if not rows:
+        return {}
+
+    COL_GERAL_CLAN = 8
+    COL_GERAL_TOTAL = 10
+
+    written_totals = {}
+    updates = []
+
+    for row_idx, row in enumerate(rows, start=1):
+        if len(row) <= COL_GERAL_CLAN:
+            continue
+        clan_name = row[COL_GERAL_CLAN].strip()
+        if clan_name not in totals:
+            continue
+
+        new_total = totals[clan_name]
+        written_totals[clan_name] = new_total
+
+        cell_range = f"{sheet_name}!K{row_idx}"
+        updates.append({
+            "range": cell_range,
+            "values": [[new_total]],
+        })
+
+    if updates:
+        service.spreadsheets().values().batchUpdate(
+            spreadsheetId=config.GSHEET_TOTALS_SPREADSHEET_ID,
+            body={
+                "valueInputOption": "RAW",
+                "data": updates,
+            },
+        ).execute()
+
+    return written_totals
 
 
 def update_clan_totals(clan_points: dict[str, int]) -> dict[str, int]:

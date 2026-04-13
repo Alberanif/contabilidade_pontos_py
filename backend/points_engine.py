@@ -2,13 +2,17 @@ import hashlib
 import json
 
 
-def compute_record_hash(row: list[str], key_columns: list[int]) -> str:
-    """Calcula hash SHA-256 determinístico a partir das colunas-chave."""
+def compute_record_hash(row: list[str], key_columns: list[int], prefix: str = "") -> str:
+    """Calcula hash SHA-256 determinístico a partir das colunas-chave.
+
+    O parâmetro opcional `prefix` permite namespacing para evitar colisões
+    entre fontes de dados diferentes (ex: registros pagantes vs. pro-bono).
+    """
     key_values = []
     for col_idx in key_columns:
         val = row[col_idx].strip() if col_idx < len(row) else ""
         key_values.append(val)
-    raw = "|".join(key_values)
+    raw = prefix + "|".join(key_values)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -73,11 +77,16 @@ def find_new_records(
     rows: list[list[str]],
     key_columns: list[int],
     processed_hashes: set[str],
+    hash_prefix: str = "",
 ) -> list[tuple[str, list[str]]]:
-    """Retorna lista de (hash, row) para registros ainda não processados."""
+    """Retorna lista de (hash, row) para registros ainda não processados.
+
+    O parâmetro opcional `hash_prefix` é repassado para `compute_record_hash`
+    para namespacing de hashes entre fontes de dados diferentes.
+    """
     new_records = []
     for row in rows:
-        record_hash = compute_record_hash(row, key_columns)
+        record_hash = compute_record_hash(row, key_columns, prefix=hash_prefix)
         if record_hash not in processed_hashes:
             new_records.append((record_hash, row))
     return new_records
@@ -96,12 +105,28 @@ def calculate_points_by_clan(
     return clan_points
 
 
+def calculate_points_by_coach(
+    new_records: list[tuple[str, list[str]]],
+    coach_col: int,
+    points_per_record: int = 30,
+) -> dict[str, int]:
+    """Retorna {coach: total_novos_pontos} para o lote de novos registros."""
+    coach_points: dict[str, int] = {}
+    for _hash, row in new_records:
+        coach = row[coach_col].strip() if coach_col < len(row) else "DESCONHECIDO"
+        if not coach:
+            coach = "DESCONHECIDO"
+        coach_points[coach] = coach_points.get(coach, 0) + points_per_record
+    return coach_points
+
+
 def build_record_data(
     record_hash: str,
     row: list[str],
     header: list[str],
     modalidade_col: int,
     clan_col: int,
+    coach_col: int,
     spreadsheet_id: str,
     sheet_name: str,
     row_number: int,
@@ -113,6 +138,10 @@ def build_record_data(
         col_name = header[i] if i < len(header) else f"col_{i}"
         raw_data[col_name] = val
 
+    coach = row[coach_col].strip() if coach_col < len(row) else "DESCONHECIDO"
+    if not coach:
+        coach = "DESCONHECIDO"
+
     return {
         "registro_hash": record_hash,
         "spreadsheet_id": spreadsheet_id,
@@ -120,6 +149,7 @@ def build_record_data(
         "row_number": row_number,
         "modalidade": row[modalidade_col].strip() if modalidade_col < len(row) else "",
         "clan": row[clan_col].strip() if clan_col < len(row) else "",
+        "coach": coach,
         "pontos": pontos,
         "raw_data": json.dumps(raw_data, ensure_ascii=False),
     }

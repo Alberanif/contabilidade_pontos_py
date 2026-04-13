@@ -34,6 +34,10 @@ GSHEET_RECORDS_SHEET_NAME = os.getenv("GSHEET_RECORDS_SHEET_NAME")
 GSHEET_TOTALS_SPREADSHEET_ID = os.getenv("GSHEET_TOTALS_SPREADSHEET_ID")
 GSHEET_TOTALS_SHEET_NAME = os.getenv("GSHEET_TOTALS_SHEET_NAME")
 
+# Planilha de Registros Pro-bono (opcional — não interrompe startup se ausente)
+GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID = os.getenv("GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID")
+GSHEET_RECORDS_PRO_BONO_SHEET_NAME = os.getenv("GSHEET_RECORDS_PRO_BONO_SHEET_NAME")
+
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -49,6 +53,16 @@ GROUP_MODALIDADES = [
     "Coaching em grupo",
     "Coaching em Empresa (contrato corporativo)",
 ]
+
+# Coluna I: "Número de pessoas atendidas por você nesse contrato"
+COL_PARTICIPANTES_GROUP = 8
+
+# Coluna B: "Nome do Coach responsável pelo atendimento:"
+COL_COACH = 1
+
+# Pontuação — Pro-bono (10 pts por registro, imediato, sem fila/batch)
+POINTS_PER_PRO_BONO = int(os.getenv("POINTS_PER_PRO_BONO", "10"))
+COL_PRO_BONO_KEY = 10  # Coluna K = índice 10 (ID único na planilha Pro-bono)
 
 # Backend
 BACKEND_HOST = os.getenv("BACKEND_HOST", "0.0.0.0")

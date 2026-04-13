@@ -22,6 +22,14 @@ export interface ClanTotal {
   updated_at: string;
 }
 
+export interface CoachTotal {
+  id: number;
+  coach: string;
+  total_pontos: number;
+  pessoas_em_espera: number;
+  updated_at: string;
+}
+
 export interface RankingEntry {
   clan: string;
   nome_completo: string;
@@ -31,6 +39,10 @@ export interface RankingEntry {
 
 export function fetchClans(): Promise<ClanTotal[]> {
   return request("/api/clans");
+}
+
+export function fetchCoaches(): Promise<CoachTotal[]> {
+  return request("/api/coaches");
 }
 
 export function fetchRanking(): Promise<RankingEntry[]> {
@@ -63,6 +75,7 @@ export function fetchRegistros(params?: {
   clan?: string;
   modalidade?: string;
   status?: string;
+  status_coach?: string;
   limit?: number;
   offset?: number;
 }): Promise<RegistrosResponse> {
@@ -70,6 +83,7 @@ export function fetchRegistros(params?: {
   if (params?.clan) query.set("clan", params.clan);
   if (params?.modalidade) query.set("modalidade", params.modalidade);
   if (params?.status) query.set("status", params.status);
+  if (params?.status_coach) query.set("status_coach", params.status_coach);
   if (params?.limit) query.set("limit", String(params.limit));
   if (params?.offset) query.set("offset", String(params.offset));
   const qs = query.toString();
@@ -85,9 +99,12 @@ export function deleteRegistro(id: number): Promise<{ mensagem: string; novo_tot
 export interface ExecutarResponse {
   novos_registros: number;
   novos_pendentes: number;
+  pro_bono_registros: number;
   pontos_por_clan: Record<string, number>;
   pontos_grupo_por_clan: Record<string, number>;
   pendentes_por_clan: Record<string, number>;
+  pontos_por_coach: Record<string, number>;
+  pendentes_por_coach: Record<string, number>;
   totais_atualizados: Record<string, number>;
   mensagem: string;
 }
@@ -115,6 +132,25 @@ export function aprovarClan(clan: string): Promise<AprovarClanResponse> {
   });
 }
 
+export interface AprovarCoachResponse {
+  coach: string;
+  lotes_aprovados: number;
+  registros_promovidos: number;
+  pessoas_contabilizadas: number;
+  pessoas_em_espera: number;
+  pontos_adicionados: number;
+  novo_total: number;
+  pendentes_restantes: number;
+  mensagem: string;
+}
+
+export function aprovarCoach(coach: string): Promise<AprovarCoachResponse> {
+  return request("/api/contabilidade/aprovar-coach", {
+    method: "POST",
+    body: JSON.stringify({ coach }),
+  });
+}
+
 export interface ImportarResponse {
   registros_importados: number;
   registros_ja_existentes: number;
@@ -131,4 +167,30 @@ export function executarContabilidade(): Promise<ExecutarResponse> {
 
 export function reprocessarContabilidade(): Promise<ReprocessarResponse> {
   return request("/api/contabilidade/reprocessar", { method: "POST" });
+}
+
+export interface ImportarInicialResponse {
+  registros_removidos: number;
+  coaching_individual_importados: number;
+  grupo_contabilizados: number;
+  grupo_pendentes: number;
+  pro_bono_importados: number;
+  totais_clans: Record<string, number>;
+  carry_over_por_clan: Record<string, number>;
+  totais_coaches: Record<string, number>;
+  carry_over_por_coach: Record<string, number>;
+  mensagem: string;
+}
+
+export function importarInicial(): Promise<ImportarInicialResponse> {
+  return request("/api/contabilidade/importar-inicial", { method: "POST" });
+}
+
+export interface AtualizarPlanilhaResponse {
+  totais_atualizados: Record<string, number>;
+  mensagem: string;
+}
+
+export function atualizarPlanilha(): Promise<AtualizarPlanilhaResponse> {
+  return request("/api/contabilidade/atualizar-planilha", { method: "POST" });
 }

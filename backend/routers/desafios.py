@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, Optional
 
 import supabase_client
 import points_engine
@@ -9,6 +9,7 @@ router = APIRouter()
 
 
 class CampoInput(BaseModel):
+    id: Optional[int] = None
     nome: str
     tipo: str  # 'texto' | 'pontuacao'
     ordem: int = 0
@@ -35,12 +36,21 @@ class RegistroCreate(BaseModel):
 def listar_desafios():
     """Lista todos os desafios com seus campos e contagem de registros."""
     desafios = supabase_client.list_desafios()
-    result = []
-    for d in desafios:
-        campos = supabase_client.list_desafio_campos(d["id"])
-        registros = supabase_client.list_desafio_registros(d["id"])
-        result.append({**d, "campos": campos, "total_registros": len(registros)})
-    return result
+    all_campos = supabase_client.list_all_desafio_campos()
+    registro_counts = supabase_client.count_desafio_registros_by_desafio()
+
+    campos_by_desafio: dict[int, list[dict]] = {}
+    for c in all_campos:
+        campos_by_desafio.setdefault(c["desafio_id"], []).append(c)
+
+    return [
+        {
+            **d,
+            "campos": campos_by_desafio.get(d["id"], []),
+            "total_registros": registro_counts.get(d["id"], 0),
+        }
+        for d in desafios
+    ]
 
 
 @router.post("")
@@ -67,13 +77,26 @@ def editar_desafio(desafio_id: int, body: DesafioUpdate):
 
     registros = supabase_client.list_desafio_registros(desafio_id)
 
-    # Substituir todos os campos
-    supabase_client.delete_desafio_campos(desafio_id)
-    campos_data = [
-        {"desafio_id": desafio_id, "nome": c.nome, "tipo": c.tipo, "ordem": c.ordem}
-        for c in body.campos
-    ]
-    new_campos = supabase_client.insert_desafio_campos(campos_data) if campos_data else []
+    # Atualizar campos com diff para preservar IDs existentes
+    old_campo_ids = {c["id"] for c in supabase_client.list_desafio_campos(desafio_id)}
+    incoming_ids = {c.id for c in body.campos if c.id is not None}
+    ids_to_delete = old_campo_ids - incoming_ids
+
+    for campo_id in ids_to_delete:
+        supabase_client.delete_desafio_campo(campo_id)
+
+    new_campos_to_insert = []
+    for c in body.campos:
+        if c.id is not None and c.id in old_campo_ids:
+            supabase_client.update_desafio_campo(c.id, c.nome, c.tipo, c.ordem)
+        else:
+            new_campos_to_insert.append(
+                {"desafio_id": desafio_id, "nome": c.nome, "tipo": c.tipo, "ordem": c.ordem}
+            )
+    if new_campos_to_insert:
+        supabase_client.insert_desafio_campos(new_campos_to_insert)
+
+    new_campos = supabase_client.list_desafio_campos(desafio_id)
 
     # Recalcular cada registro e aplicar deltas no total do clã
     for reg in registros:

@@ -442,3 +442,39 @@ def add_delta_to_clan_total(clan: str, delta: int) -> dict:
     current = current_totals.get(clan, 0)
     new_total = max(0, current + delta)
     return upsert_clan_total(clan, new_total)
+
+
+def update_desafio_campo(campo_id: int, nome: str, tipo: str, ordem: int) -> dict:
+    """Atualiza um campo de desafio existente."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_CAMPOS)
+        .update({"nome": nome, "tipo": tipo, "ordem": ordem})
+        .eq("id", campo_id)
+        .execute()
+    )
+    return result.data[0]
+
+
+def delete_desafio_campo(campo_id: int) -> None:
+    """Remove um campo de desafio pelo ID."""
+    client = _get_client()
+    client.table(TABLE_DESAFIO_CAMPOS).delete().eq("id", campo_id).execute()
+
+
+def list_all_desafio_campos() -> list[dict]:
+    """Retorna todos os campos de todos os desafios."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIO_CAMPOS).select("*").order("ordem", desc=False).execute()
+    return result.data
+
+
+def count_desafio_registros_by_desafio() -> dict[int, int]:
+    """Retorna {desafio_id: contagem_registros} para todos os desafios."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIO_REGISTROS).select("desafio_id").execute()
+    counts: dict[int, int] = {}
+    for row in result.data:
+        did = row["desafio_id"]
+        counts[did] = counts.get(did, 0) + 1
+    return counts

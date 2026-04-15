@@ -164,6 +164,7 @@ export default function Desafios() {
       setSubmitting(true);
       setError("");
       const campos = formCampos.map((c, i) => ({
+        ...(c.id !== undefined ? { id: c.id } : {}),
         nome: c.nome,
         tipo: c.tipo,
         ordem: i,

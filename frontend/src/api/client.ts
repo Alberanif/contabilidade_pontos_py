@@ -240,7 +240,7 @@ export function updateDesafio(
   data: {
     nome: string;
     contabilizar_pontos: boolean;
-    campos: { nome: string; tipo: string; ordem: number }[];
+    campos: { id?: number; nome: string; tipo: string; ordem: number }[];
   }
 ): Promise<Desafio> {
   return request(`/api/desafios/${id}`, { method: 'PUT', body: JSON.stringify(data) });

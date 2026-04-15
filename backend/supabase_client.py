@@ -5,6 +5,9 @@ import config
 TABLE_REGISTROS = "pontos_ultimate_registros_contabilizados"
 TABLE_TOTAIS = "pontos_ultimate_totais_por_clan"
 TABLE_TOTAIS_COACH = "pontos_ultimate_totais_por_coach"
+TABLE_DESAFIOS = "desafios"
+TABLE_DESAFIO_CAMPOS = "desafio_campos"
+TABLE_DESAFIO_REGISTROS = "desafio_registros"
 
 
 def _get_client() -> Client:
@@ -274,3 +277,168 @@ def get_coach_carry_over(coach: str) -> int:
         .execute()
     )
     return result.data[0]["pessoas_em_espera"] or 0 if result.data else 0
+
+
+# --- Desafios ---
+
+
+def create_desafio(nome: str, contabilizar_pontos: bool) -> dict:
+    """Cria um novo desafio."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIOS).insert(
+        {"nome": nome, "contabilizar_pontos": contabilizar_pontos}
+    ).execute()
+    return result.data[0]
+
+
+def list_desafios() -> list[dict]:
+    """Lista todos os desafios ordenados por data de criação."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIOS).select("*").order("created_at", desc=False).execute()
+    return result.data
+
+
+def get_desafio(desafio_id: int) -> dict | None:
+    """Busca um desafio pelo ID."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIOS).select("*").eq("id", desafio_id).execute()
+    return result.data[0] if result.data else None
+
+
+def update_desafio(desafio_id: int, nome: str, contabilizar_pontos: bool) -> dict:
+    """Atualiza nome e modo de contabilização de um desafio."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIOS)
+        .update({"nome": nome, "contabilizar_pontos": contabilizar_pontos})
+        .eq("id", desafio_id)
+        .execute()
+    )
+    return result.data[0]
+
+
+def delete_desafio(desafio_id: int) -> dict | None:
+    """Exclui um desafio (CASCADE exclui campos e registros)."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIOS).delete().eq("id", desafio_id).execute()
+    return result.data[0] if result.data else None
+
+
+# --- Desafio Campos ---
+
+
+def insert_desafio_campos(campos: list[dict]) -> list[dict]:
+    """Insere lista de campos. Cada dict: {desafio_id, nome, tipo, ordem}."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIO_CAMPOS).insert(campos).execute()
+    return result.data
+
+
+def list_desafio_campos(desafio_id: int) -> list[dict]:
+    """Lista campos de um desafio ordenados por 'ordem'."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_CAMPOS)
+        .select("*")
+        .eq("desafio_id", desafio_id)
+        .order("ordem", desc=False)
+        .execute()
+    )
+    return result.data
+
+
+def delete_desafio_campos(desafio_id: int) -> None:
+    """Remove todos os campos de um desafio (usado ao editar campos)."""
+    client = _get_client()
+    client.table(TABLE_DESAFIO_CAMPOS).delete().eq("desafio_id", desafio_id).execute()
+
+
+# --- Desafio Registros ---
+
+
+def create_desafio_registro(
+    desafio_id: int, clan: str, valores: dict, total_pontos: int
+) -> dict:
+    """Cria um registro de clã em um desafio."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIO_REGISTROS).insert(
+        {
+            "desafio_id": desafio_id,
+            "clan": clan,
+            "valores": valores,
+            "total_pontos": total_pontos,
+        }
+    ).execute()
+    return result.data[0]
+
+
+def list_desafio_registros(desafio_id: int) -> list[dict]:
+    """Lista registros de um desafio ordenados por data de criação."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS)
+        .select("*")
+        .eq("desafio_id", desafio_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return result.data
+
+
+def get_desafio_registro_by_clan(desafio_id: int, clan: str) -> dict | None:
+    """Busca o registro de um clã específico em um desafio."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS)
+        .select("*")
+        .eq("desafio_id", desafio_id)
+        .eq("clan", clan)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def get_desafio_registro_by_id(registro_id: int) -> dict | None:
+    """Busca um registro de desafio pelo ID."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS)
+        .select("*")
+        .eq("id", registro_id)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def delete_desafio_registro(registro_id: int) -> dict | None:
+    """Exclui um registro de desafio pelo ID."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS).delete().eq("id", registro_id).execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def update_desafio_registro_pontos(
+    registro_id: int, valores: dict, total_pontos: int
+) -> dict:
+    """Atualiza os valores e total_pontos de um registro (usado no recálculo)."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS)
+        .update({"valores": valores, "total_pontos": total_pontos})
+        .eq("id", registro_id)
+        .execute()
+    )
+    return result.data[0]
+
+
+# --- Helper de delta para clãs ---
+
+
+def add_delta_to_clan_total(clan: str, delta: int) -> dict:
+    """Soma delta (positivo ou negativo) ao total_pontos do clã. Mínimo 0."""
+    current_totals = get_clan_totals()
+    current = current_totals.get(clan, 0)
+    new_total = max(0, current + delta)
+    return upsert_clan_total(clan, new_total)

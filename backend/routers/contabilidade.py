@@ -623,11 +623,11 @@ def importar_inicial():
         for record_hash, row in coaching_records:
             _build_and_insert(
                 record_hash, row, header, data_rows,
-                pontos=config.POINTS_PER_COACHING_INDIVIDUAL,
+                pontos=0,
                 extra_fields={
                     "status": "contabilizado",
                     "status_coach": "contabilizado",
-                    "pontos_coach": config.POINTS_PER_COACHING_INDIVIDUAL,
+                    "pontos_coach": 0,
                 },
             )
 
@@ -738,11 +738,11 @@ def importar_inicial():
             for record_hash, row in pb_records:
                 _build_and_insert_pro_bono(
                     record_hash, row, pb_header, pb_data_rows,
-                    pontos=config.POINTS_PER_PRO_BONO,
+                    pontos=0,
                     extra_fields={
                         "status": "contabilizado",
                         "status_coach": "contabilizado",
-                        "pontos_coach": config.POINTS_PER_PRO_BONO,
+                        "pontos_coach": 0,
                     },
                 )
             pro_bono_importados = len(pb_records)

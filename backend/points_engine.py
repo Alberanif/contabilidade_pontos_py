@@ -153,3 +153,20 @@ def build_record_data(
         "pontos": pontos,
         "raw_data": json.dumps(raw_data, ensure_ascii=False),
     }
+
+
+def calculate_desafio_pontos(campos: list[dict], valores: dict) -> int:
+    """Soma os valores dos campos do tipo 'pontuacao'.
+
+    campos: lista de dicts com {'id': int, 'tipo': str}
+    valores: dict com {str(campo_id): valor} — chave é o ID do campo como string
+    """
+    total = 0
+    for campo in campos:
+        if campo["tipo"] == "pontuacao":
+            val = valores.get(str(campo["id"]), 0)
+            try:
+                total += int(val)
+            except (ValueError, TypeError):
+                pass
+    return total

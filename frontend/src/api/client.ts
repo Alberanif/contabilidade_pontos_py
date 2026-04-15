@@ -194,3 +194,81 @@ export interface AtualizarPlanilhaResponse {
 export function atualizarPlanilha(): Promise<AtualizarPlanilhaResponse> {
   return request("/api/contabilidade/atualizar-planilha", { method: "POST" });
 }
+
+// --- Desafios ---
+
+export interface DesafioCampo {
+  id: number;
+  desafio_id: number;
+  nome: string;
+  tipo: 'texto' | 'pontuacao';
+  ordem: number;
+}
+
+export interface Desafio {
+  id: number;
+  nome: string;
+  contabilizar_pontos: boolean;
+  campos: DesafioCampo[];
+  total_registros: number;
+  created_at: string;
+}
+
+export interface DesafioRegistro {
+  id: number;
+  desafio_id: number;
+  clan: string;
+  valores: Record<string, string | number>;
+  total_pontos: number;
+  created_at: string;
+}
+
+export function fetchDesafios(): Promise<Desafio[]> {
+  return request('/api/desafios');
+}
+
+export function createDesafio(data: {
+  nome: string;
+  contabilizar_pontos: boolean;
+  campos: { nome: string; tipo: string; ordem: number }[];
+}): Promise<Desafio> {
+  return request('/api/desafios', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export function updateDesafio(
+  id: number,
+  data: {
+    nome: string;
+    contabilizar_pontos: boolean;
+    campos: { nome: string; tipo: string; ordem: number }[];
+  }
+): Promise<Desafio> {
+  return request(`/api/desafios/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+export function deleteDesafio(id: number): Promise<{ mensagem: string }> {
+  return request(`/api/desafios/${id}`, { method: 'DELETE' });
+}
+
+export function fetchDesafioRegistros(desafioId: number): Promise<DesafioRegistro[]> {
+  return request(`/api/desafios/${desafioId}/registros`);
+}
+
+export function createDesafioRegistro(
+  desafioId: number,
+  data: { clan: string; valores: Record<string, string> }
+): Promise<DesafioRegistro> {
+  return request(`/api/desafios/${desafioId}/registros`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteDesafioRegistro(
+  desafioId: number,
+  registroId: number
+): Promise<{ mensagem: string }> {
+  return request(`/api/desafios/${desafioId}/registros/${registroId}`, {
+    method: 'DELETE',
+  });
+}

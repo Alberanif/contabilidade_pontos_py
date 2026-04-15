@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 import config  # noqa: F401 — valida variáveis de ambiente ao importar
 from routers import contabilidade, registros, clans, coaches, desafios
@@ -28,6 +31,12 @@ app.include_router(desafios.router, prefix="/api/desafios", tags=["Desafios"])
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+# Serve frontend estático — deve ser montado após todas as rotas /api
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.exists():
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
 
 
 if __name__ == "__main__":

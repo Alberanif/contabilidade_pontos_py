@@ -14,6 +14,12 @@ import {
   type DesafioRegistro,
 } from "../api/client";
 
+function formatDate(dateStr: string): string {
+  if (!dateStr) return "-";
+  const [year, month, day] = dateStr.split("-");
+  return `${day}/${month}/${year}`;
+}
+
 type Mode = "list" | "form" | "detail";
 
 interface CampoForm {
@@ -34,6 +40,7 @@ export default function Desafios() {
   const [editingDesafio, setEditingDesafio] = useState<Desafio | null>(null);
   const [formNome, setFormNome] = useState("");
   const [formContabilizar, setFormContabilizar] = useState(true);
+  const [formData, setFormData] = useState("");
   const [formCampos, setFormCampos] = useState<CampoForm[]>([]);
 
   // Register form state
@@ -102,6 +109,7 @@ export default function Desafios() {
     setEditingDesafio(null);
     setFormNome("");
     setFormContabilizar(true);
+    setFormData("");
     setFormCampos([]);
     setError("");
     setSuccess("");
@@ -112,6 +120,7 @@ export default function Desafios() {
     setEditingDesafio(desafio);
     setFormNome(desafio.nome);
     setFormContabilizar(desafio.contabilizar_pontos);
+    setFormData(desafio.data ?? "");
     setFormCampos(
       desafio.campos.map((c) => ({
         id: c.id,
@@ -160,6 +169,10 @@ export default function Desafios() {
       setError("O nome do desafio é obrigatório.");
       return;
     }
+    if (!formData) {
+      setError("A data do desafio é obrigatória.");
+      return;
+    }
     try {
       setSubmitting(true);
       setError("");
@@ -173,6 +186,7 @@ export default function Desafios() {
         await updateDesafio(editingDesafio.id, {
           nome: formNome,
           contabilizar_pontos: formContabilizar,
+          data: formData,
           campos,
         });
         setSuccess("Desafio atualizado com sucesso.");
@@ -180,6 +194,7 @@ export default function Desafios() {
         await createDesafio({
           nome: formNome,
           contabilizar_pontos: formContabilizar,
+          data: formData,
           campos,
         });
         setSuccess("Desafio criado com sucesso.");
@@ -312,6 +327,7 @@ export default function Desafios() {
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
                   <th className="py-3 px-4 font-medium">Nome</th>
+                  <th className="py-3 px-4 font-medium">Data</th>
                   <th className="py-3 px-4 font-medium text-center">Campos</th>
                   <th className="py-3 px-4 font-medium text-center">Clãs registrados</th>
                   <th className="py-3 px-4 font-medium text-center">Pontuação</th>
@@ -331,6 +347,9 @@ export default function Desafios() {
                       >
                         {d.nome}
                       </button>
+                    </td>
+                    <td className="py-3 px-4 text-gray-600">
+                      {formatDate(d.data)}
                     </td>
                     <td className="py-3 px-4 text-center text-gray-600">
                       {d.campos.length}
@@ -402,6 +421,19 @@ export default function Desafios() {
               onChange={(e) => setFormNome(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="Ex: Semana de Treinos"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Data do desafio
+            </label>
+            <input
+              type="date"
+              value={formData}
+              onChange={(e) => setFormData(e.target.value)}
+              required
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 
@@ -541,6 +573,11 @@ export default function Desafios() {
               {selectedDesafio.contabilizar_pontos
                 ? "Registrar Pontos"
                 : "Não Registrar Pontos"}
+            </span>
+          )}
+          {selectedDesafio?.data && (
+            <span className="text-sm text-gray-500">
+              {formatDate(selectedDesafio.data)}
             </span>
           )}
         </div>

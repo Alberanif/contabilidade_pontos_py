@@ -16,7 +16,9 @@ import {
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return "-";
-  const [year, month, day] = dateStr.split("-");
+  const parts = dateStr.substring(0, 10).split("-");
+  if (parts.length !== 3) return dateStr;
+  const [year, month, day] = parts;
   return `${day}/${month}/${year}`;
 }
 
@@ -433,7 +435,7 @@ export default function Desafios() {
               value={formData}
               onChange={(e) => setFormData(e.target.value)}
               required
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 

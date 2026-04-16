@@ -1,3 +1,4 @@
+from datetime import date
 from supabase import create_client, Client
 
 import config
@@ -282,7 +283,7 @@ def get_coach_carry_over(coach: str) -> int:
 # --- Desafios ---
 
 
-def create_desafio(nome: str, contabilizar_pontos: bool, data) -> dict:
+def create_desafio(nome: str, contabilizar_pontos: bool, data: date) -> dict:
     """Cria um novo desafio."""
     client = _get_client()
     result = client.table(TABLE_DESAFIOS).insert(
@@ -305,7 +306,7 @@ def get_desafio(desafio_id: int) -> dict | None:
     return result.data[0] if result.data else None
 
 
-def update_desafio(desafio_id: int, nome: str, contabilizar_pontos: bool, data) -> dict:
+def update_desafio(desafio_id: int, nome: str, contabilizar_pontos: bool, data: date) -> dict:
     """Atualiza nome, modo de contabilização e data de um desafio."""
     client = _get_client()
     result = (

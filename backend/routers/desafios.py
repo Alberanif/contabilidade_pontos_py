@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Optional
+from datetime import date
 
 import supabase_client
 import points_engine
@@ -18,12 +19,14 @@ class CampoInput(BaseModel):
 class DesafioCreate(BaseModel):
     nome: str
     contabilizar_pontos: bool = True
+    data: date
     campos: list[CampoInput]
 
 
 class DesafioUpdate(BaseModel):
     nome: str
     contabilizar_pontos: bool
+    data: date
     campos: list[CampoInput]
 
 
@@ -56,7 +59,7 @@ def listar_desafios():
 @router.post("")
 def criar_desafio(body: DesafioCreate):
     """Cria um novo desafio com seus campos."""
-    desafio = supabase_client.create_desafio(body.nome, body.contabilizar_pontos)
+    desafio = supabase_client.create_desafio(body.nome, body.contabilizar_pontos, body.data)
     campos_data = [
         {"desafio_id": desafio["id"], "nome": c.nome, "tipo": c.tipo, "ordem": c.ordem}
         for c in body.campos
@@ -119,7 +122,7 @@ def editar_desafio(desafio_id: int, body: DesafioUpdate):
                 supabase_client.add_delta_to_clan_total(reg["clan"], new_total)
         # false → false: nenhum efeito no ranking
 
-    updated = supabase_client.update_desafio(desafio_id, body.nome, new_contabilizar)
+    updated = supabase_client.update_desafio(desafio_id, body.nome, new_contabilizar, body.data)
     return {**updated, "campos": new_campos, "total_registros": len(registros)}
 
 

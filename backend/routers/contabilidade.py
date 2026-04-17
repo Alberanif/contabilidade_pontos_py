@@ -244,6 +244,12 @@ class AtualizarPlanilhaResponse(BaseModel):
     mensagem: str
 
 
+class PreencherDatasResponse(BaseModel):
+    registros_atualizados: int
+    registros_sem_data: int
+    mensagem: str
+
+
 @router.post("/importar", response_model=ImportarResponse)
 def importar_registros():
     try:
@@ -879,6 +885,54 @@ def atualizar_planilha():
         return AtualizarPlanilhaResponse(
             totais_atualizados=resultado,
             mensagem=f"{len(resultado)} clã(s) atualizados na planilha.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/preencher-datas", response_model=PreencherDatasResponse)
+def preencher_datas():
+    """Popula data_registro para registros existentes a partir das planilhas. Uso único (backfill)."""
+    try:
+        atualizados = 0
+        sem_data = 0
+
+        rows_pay = google_sheets_client.fetch_records()
+        if rows_pay:
+            data_rows = rows_pay[1:]
+            for row in data_rows:
+                record_hash = points_engine.compute_record_hash(row, KEY_COLUMNS)
+                raw_date = row[config.COL_DATE_PAYING].strip() if config.COL_DATE_PAYING < len(row) else ""
+                parsed = points_engine._parse_date(raw_date)
+                val = str(parsed) if parsed else None
+                encontrado = supabase_client.update_data_registro(record_hash, val)
+                if encontrado:
+                    if val:
+                        atualizados += 1
+                    else:
+                        sem_data += 1
+
+        rows_pb = google_sheets_client.fetch_records_pro_bono()
+        if rows_pb:
+            data_rows_pb = rows_pb[1:]
+            for row in data_rows_pb:
+                record_hash = points_engine.compute_record_hash(
+                    row, KEY_COLUMNS_PRO_BONO, prefix=HASH_PREFIX_PRO_BONO
+                )
+                raw_date = row[config.COL_DATE_PRO_BONO].strip() if config.COL_DATE_PRO_BONO < len(row) else ""
+                parsed = points_engine._parse_date(raw_date)
+                val = str(parsed) if parsed else None
+                encontrado = supabase_client.update_data_registro(record_hash, val)
+                if encontrado:
+                    if val:
+                        atualizados += 1
+                    else:
+                        sem_data += 1
+
+        return PreencherDatasResponse(
+            registros_atualizados=atualizados,
+            registros_sem_data=sem_data,
+            mensagem=f"Backfill concluído: {atualizados} registro(s) com data. {sem_data} sem data válida.",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

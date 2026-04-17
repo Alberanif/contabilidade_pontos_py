@@ -3,12 +3,14 @@ import {
   fetchClans,
   fetchRanking,
   fetchCoaches,
+  fetchHistorico,
   executarContabilidade,
   atualizarPlanilha,
   type ClanTotal,
   type CoachTotal,
   type RankingEntry,
   type ExecutarResponse,
+  type HistoricoResponse,
 } from "../api/client";
 import ClanCard from "../components/ClanCard";
 
@@ -27,6 +29,10 @@ export default function Dashboard() {
   const [updatingSheet, setUpdatingSheet] = useState(false);
   const [sheetMessage, setSheetMessage] = useState("");
   const [error, setError] = useState("");
+
+  const [dataCorte, setDataCorte] = useState<string>("");
+  const [historicoData, setHistoricoData] = useState<HistoricoResponse | null>(null);
+  const [loadingHistorico, setLoadingHistorico] = useState(false);
 
   const loadData = async () => {
     try {
@@ -60,6 +66,30 @@ export default function Dashboard() {
     loadData();
     loadRanking();
   }, []);
+
+  const loadHistorico = async (ate: string) => {
+    try {
+      setLoadingHistorico(true);
+      setError("");
+      const data = await fetchHistorico(ate);
+      setHistoricoData(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao carregar histórico");
+      setHistoricoData(null);
+    } finally {
+      setLoadingHistorico(false);
+    }
+  };
+
+  const handleDataCorteChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setDataCorte(val);
+    if (val) {
+      loadHistorico(val);
+    } else {
+      setHistoricoData(null);
+    }
+  };
 
   const handleAtualizarPlanilha = async () => {
     try {
@@ -118,6 +148,43 @@ export default function Dashboard() {
         </div>
       )}
 
+      <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+        <label className="text-sm font-medium text-gray-700 whitespace-nowrap">
+          Ver ranking até:
+        </label>
+        <input
+          type="date"
+          value={dataCorte}
+          onChange={handleDataCorteChange}
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        {dataCorte && (
+          <button
+            onClick={() => {
+              setDataCorte("");
+              setHistoricoData(null);
+            }}
+            className="text-sm text-gray-500 hover:text-gray-700 underline"
+          >
+            Limpar filtro
+          </button>
+        )}
+      </div>
+
+      {dataCorte && historicoData && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 rounded-lg text-sm">
+          Visualizando histórico até{" "}
+          <strong>
+            {new Date(dataCorte + "T00:00:00").toLocaleDateString("pt-BR")}
+          </strong>
+          . Os valores abaixo refletem o estado acumulado até essa data.
+        </div>
+      )}
+
+      {loadingHistorico && (
+        <p className="text-gray-500 text-sm">Carregando histórico...</p>
+      )}
+
       {sheetMessage && (
         <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg">
           {sheetMessage}
@@ -172,8 +239,15 @@ export default function Dashboard() {
             <div>
               <h3 className="text-lg font-semibold text-gray-700 mb-3">Pontos por Clã</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {clans.map((c) => (
-                  <ClanCard key={c.id} clan={c.clan} totalPontos={c.total_pontos} />
+                {(dataCorte && historicoData
+                  ? Object.entries(historicoData.clans).map(([clan, total_pontos], idx) => ({
+                      id: idx,
+                      clan,
+                      total_pontos,
+                    }))
+                  : clans
+                ).map((c) => (
+                  <ClanCard key={c.clan} clan={c.clan} totalPontos={c.total_pontos} />
                 ))}
               </div>
             </div>
@@ -191,7 +265,15 @@ export default function Dashboard() {
                 nomeMap[entry.clan] = entry.nome_completo;
               }
 
-              const sorted = [...clans]
+              const clanSource: { clan: string; total_pontos: number }[] =
+                dataCorte && historicoData
+                  ? Object.entries(historicoData.clans).map(([clan, total_pontos]) => ({
+                      clan,
+                      total_pontos,
+                    }))
+                  : clans.map((c) => ({ clan: c.clan, total_pontos: c.total_pontos }));
+
+              const sorted = [...clanSource]
                 .sort((a, b) => b.total_pontos - a.total_pontos)
                 .map((c, idx) => ({
                   posicao: idx + 1,
@@ -238,10 +320,18 @@ export default function Dashboard() {
           <h3 className="text-lg font-semibold text-gray-700 mb-3">Ranking de Coaches</h3>
           {loading ? (
             <p className="text-gray-500">Carregando coaches...</p>
-          ) : coaches.length === 0 ? (
+          ) : (dataCorte && historicoData ? Object.keys(historicoData.coaches).length === 0 : coaches.length === 0) ? (
             <p className="text-gray-500">Nenhum dado disponível.</p>
           ) : (() => {
-            const sorted = [...coaches]
+            const coachSource: { coach: string; total_pontos: number }[] =
+              dataCorte && historicoData
+                ? Object.entries(historicoData.coaches).map(([coach, total_pontos]) => ({
+                    coach,
+                    total_pontos,
+                  }))
+                : coaches.map((c) => ({ coach: c.coach, total_pontos: c.total_pontos }));
+
+            const sorted = [...coachSource]
               .sort((a, b) => b.total_pontos - a.total_pontos)
               .map((c, idx) => ({
                 posicao: idx + 1,

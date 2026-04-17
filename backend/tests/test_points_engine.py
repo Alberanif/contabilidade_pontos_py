@@ -88,3 +88,93 @@ class TestComputeBatchPromotionsByPeople:
         assert ids == [1]
         assert lotes == 0
         assert carry == 4
+
+
+from points_engine import build_record_data
+
+
+def _make_row_and_header():
+    row = [
+        "1",                       # col 0: clan
+        "Coach A",                 # col 1: coach
+        "", "", "",
+        "Coaching Individual",     # col 5: modalidade
+        "", "", "", "",
+        "06/04/2026 13:58:38",     # col 10: data (col K)
+        "HASH_KEY_123",            # col 11: chave
+    ]
+    header = [f"col_{i}" for i in range(len(row))]
+    return row, header
+
+
+def test_build_record_data_inclui_data_registro_quando_date_col_fornecido():
+    row, header = _make_row_and_header()
+    result = build_record_data(
+        record_hash="abc123",
+        row=row,
+        header=header,
+        modalidade_col=5,
+        clan_col=0,
+        coach_col=1,
+        spreadsheet_id="sheet1",
+        sheet_name="Sheet1",
+        row_number=2,
+        pontos=30,
+        date_col=10,
+    )
+    assert result["data_registro"] == "2026-04-06"
+
+
+def test_build_record_data_data_registro_none_quando_data_invalida():
+    row, header = _make_row_and_header()
+    row[10] = "data-invalida"
+    result = build_record_data(
+        record_hash="abc123",
+        row=row,
+        header=header,
+        modalidade_col=5,
+        clan_col=0,
+        coach_col=1,
+        spreadsheet_id="sheet1",
+        sheet_name="Sheet1",
+        row_number=2,
+        pontos=30,
+        date_col=10,
+    )
+    assert result["data_registro"] is None
+
+
+def test_build_record_data_sem_data_registro_quando_date_col_none():
+    row, header = _make_row_and_header()
+    result = build_record_data(
+        record_hash="abc123",
+        row=row,
+        header=header,
+        modalidade_col=5,
+        clan_col=0,
+        coach_col=1,
+        spreadsheet_id="sheet1",
+        sheet_name="Sheet1",
+        row_number=2,
+        pontos=30,
+    )
+    assert "data_registro" not in result
+
+
+def test_build_record_data_data_registro_none_quando_coluna_ausente():
+    row = ["1", "Coach A", "", "", "", "Coaching Individual"]  # só 6 colunas
+    header = [f"col_{i}" for i in range(len(row))]
+    result = build_record_data(
+        record_hash="abc123",
+        row=row,
+        header=header,
+        modalidade_col=5,
+        clan_col=0,
+        coach_col=1,
+        spreadsheet_id="sheet1",
+        sheet_name="Sheet1",
+        row_number=2,
+        pontos=30,
+        date_col=10,  # índice fora do range da row
+    )
+    assert result["data_registro"] is None

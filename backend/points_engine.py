@@ -133,6 +133,7 @@ def build_record_data(
     sheet_name: str,
     row_number: int,
     pontos: int,
+    date_col: int | None = None,
 ) -> dict:
     """Constrói o dicionário de dados para inserção no Supabase."""
     raw_data = {}
@@ -144,7 +145,7 @@ def build_record_data(
     if not coach:
         coach = "DESCONHECIDO"
 
-    return {
+    result = {
         "registro_hash": record_hash,
         "spreadsheet_id": spreadsheet_id,
         "sheet_name": sheet_name,
@@ -155,6 +156,13 @@ def build_record_data(
         "pontos": pontos,
         "raw_data": json.dumps(raw_data, ensure_ascii=False),
     }
+
+    if date_col is not None:
+        raw_date = row[date_col].strip() if date_col < len(row) else ""
+        parsed = _parse_date(raw_date)
+        result["data_registro"] = str(parsed) if parsed else None
+
+    return result
 
 
 _DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")

@@ -67,3 +67,9 @@ COL_PRO_BONO_KEY = 10  # Coluna K = índice 10 (ID único na planilha Pro-bono)
 # Backend
 BACKEND_HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
+
+# Ranking de coaches — apenas registros a partir desta data contam para pontuação individual
+from datetime import date as _date
+COACH_RANKING_START_DATE = _date(2026, 4, 1)
+COL_DATE_PAYING   = 10  # Coluna K (índice 10) — data na planilha de clientes pagantes
+COL_DATE_PRO_BONO = 9   # Coluna J (índice 9)  — data na planilha de pro-bono

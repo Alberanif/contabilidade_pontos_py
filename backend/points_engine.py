@@ -1,5 +1,7 @@
 import hashlib
 import json
+import re
+from datetime import date, datetime
 
 
 def compute_record_hash(row: list[str], key_columns: list[int], prefix: str = "") -> str:
@@ -153,6 +155,50 @@ def build_record_data(
         "pontos": pontos,
         "raw_data": json.dumps(raw_data, ensure_ascii=False),
     }
+
+
+_DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+
+
+def _parse_date(raw: str):
+    """Extrai data de strings como '06/04/2026 13:58:38' ou '01/04/2026'.
+
+    Usa regex para ignorar componente de horário e variações de formato.
+    Retorna None se nenhum padrão dd/mm/yyyy for encontrado.
+    """
+    if not raw:
+        return None
+    m = _DATE_RE.search(raw.strip())
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def filter_records_by_date_from(
+    records: list[tuple[str, list[str]]],
+    date_col: int,
+    start_date: date,
+) -> list[tuple[str, list[str]]]:
+    """Retorna registros cuja data (date_col) >= start_date.
+
+    Comportamento fail-open: registros com coluna ausente, célula vazia ou
+    formato não reconhecido são INCLUÍDOS (benefício da dúvida).
+    Apenas registros com data confirmada antes de start_date são excluídos.
+    """
+    result = []
+    for record_hash, row in records:
+        # Coluna ausente ou célula vazia → incluir
+        if date_col >= len(row) or not row[date_col] or not row[date_col].strip():
+            result.append((record_hash, row))
+            continue
+        parsed = _parse_date(row[date_col])
+        # Formato desconhecido → incluir; data antes do corte → excluir
+        if parsed is None or parsed >= start_date:
+            result.append((record_hash, row))
+    return result
 
 
 def calculate_desafio_pontos(campos: list[dict], valores: dict) -> int:

@@ -102,8 +102,11 @@ def _process_pro_bono_records(
         new_records, COL_CLAN, config.POINTS_PER_PRO_BONO
     )
     pontos_por_clan = {_normalize_clan(k): v for k, v in raw_clan_pts.items()}
+    coach_eligible_pb = points_engine.filter_records_by_date_from(
+        new_records, config.COL_DATE_PRO_BONO, config.COACH_RANKING_START_DATE
+    )
     pontos_por_coach = points_engine.calculate_points_by_coach(
-        new_records, COL_COACH, config.POINTS_PER_PRO_BONO
+        coach_eligible_pb, COL_COACH, config.POINTS_PER_PRO_BONO
     )
     return len(new_records), pontos_por_clan, pontos_por_coach
 
@@ -124,13 +127,17 @@ def _process_group_records(
             num_participantes = max(1, int(raw_participantes))
         except (ValueError, AttributeError):
             num_participantes = 1
+        record_date = points_engine._parse_date(
+            row[config.COL_DATE_PAYING].strip() if config.COL_DATE_PAYING < len(row) else ""
+        )
+        coach_elegivel = record_date is not None and record_date >= config.COACH_RANKING_START_DATE
         _build_and_insert(
             record_hash, row, header, data_rows,
             pontos=0,
             extra_fields={
                 "status": "pendente",
                 "num_participantes": num_participantes,
-                "status_coach": "pendente",
+                "status_coach": "pendente" if coach_elegivel else "contabilizado",
                 "pontos_coach": 0
             },
         )
@@ -427,8 +434,11 @@ def executar_contabilidade():
         )
         pontos_por_clan = {_normalize_clan(k): v for k, v in raw_points.items()}
 
+        coach_eligible_ci = points_engine.filter_records_by_date_from(
+            new_records, config.COL_DATE_PAYING, config.COACH_RANKING_START_DATE
+        )
         pontos_por_coach = points_engine.calculate_points_by_coach(
-            new_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+            coach_eligible_ci, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
 
         processed_hashes = supabase_client.get_processed_hashes()
@@ -530,8 +540,11 @@ def reprocessar_contabilidade():
         )
         pontos_por_clan = {_normalize_clan(k): v for k, v in raw_points.items()}
 
+        coach_eligible_ci = points_engine.filter_records_by_date_from(
+            new_records, config.COL_DATE_PAYING, config.COACH_RANKING_START_DATE
+        )
         pontos_por_coach = points_engine.calculate_points_by_coach(
-            new_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+            coach_eligible_ci, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
 
         novos_pendentes, pontos_grupo_por_clan, pendentes_por_clan, pendentes_por_coach = _process_group_records(
@@ -712,8 +725,12 @@ def importar_inicial():
             supabase_client.upsert_clan_total(clan, total, pessoas_em_espera=carry_over)
 
         # Fase 7: Totais e carry-over por coach.
+        # Apenas registros >= COACH_RANKING_START_DATE contam para pontuação de coaches.
+        coach_eligible_seed = points_engine.filter_records_by_date_from(
+            coaching_records, config.COL_DATE_PAYING, config.COACH_RANKING_START_DATE
+        )
         pontos_por_coach = points_engine.calculate_points_by_coach(
-            coaching_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+            coach_eligible_seed, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
 
         carry_over_por_coach: dict[str, int] = {}
@@ -775,6 +792,72 @@ def importar_inicial():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/debug/date-sample")
+def debug_date_sample():
+    """Diagnóstico: resumo por modalidade/mês e amostra dos registros elegíveis."""
+    rows_pay = google_sheets_client.fetch_records()
+    rows_pb  = google_sheets_client.fetch_records_pro_bono()
+
+    ci_total = ci_elegiveis = 0
+    group_total = group_elegiveis_coach = 0
+    ci_abril_sample = []
+
+    for i, row in enumerate(rows_pay[1:], start=2):
+        modalidade = row[COL_MODALIDADE].strip() if COL_MODALIDADE < len(row) else ""
+        coach = row[config.COL_COACH].strip() if config.COL_COACH < len(row) else ""
+        raw_date = row[config.COL_DATE_PAYING] if config.COL_DATE_PAYING < len(row) else ""
+        parsed = points_engine._parse_date(raw_date)
+        elegivel = parsed is None or parsed >= config.COACH_RANKING_START_DATE
+
+        if modalidade.upper() == "COACHING INDIVIDUAL":
+            ci_total += 1
+            if elegivel:
+                ci_elegiveis += 1
+                if len(ci_abril_sample) < 10:
+                    ci_abril_sample.append({
+                        "linha": i, "coach": coach,
+                        "col_k_raw": raw_date, "data_parsed": str(parsed) if parsed else None,
+                    })
+        elif any(m.upper() in modalidade.upper() for m in ["GRUPO", "EMPRESA"]):
+            group_total += 1
+            if elegivel:
+                group_elegiveis_coach += 1
+
+    pb_total = pb_elegiveis = 0
+    pb_abril_sample = []
+    for i, row in enumerate(rows_pb[1:], start=2):
+        coach = row[config.COL_COACH].strip() if config.COL_COACH < len(row) else ""
+        raw_date = row[config.COL_DATE_PRO_BONO] if config.COL_DATE_PRO_BONO < len(row) else ""
+        parsed = points_engine._parse_date(raw_date)
+        elegivel = parsed is None or parsed >= config.COACH_RANKING_START_DATE
+        pb_total += 1
+        if elegivel:
+            pb_elegiveis += 1
+            if len(pb_abril_sample) < 10:
+                pb_abril_sample.append({
+                    "linha": i, "coach": coach,
+                    "col_j_raw": raw_date, "data_parsed": str(parsed) if parsed else None,
+                })
+
+    return {
+        "resumo": {
+            "ci_total": ci_total,
+            "ci_elegiveis_abril_em_diante": ci_elegiveis,
+            "group_total": group_total,
+            "group_elegiveis_coach_abril_em_diante": group_elegiveis_coach,
+            "pro_bono_total": pb_total,
+            "pro_bono_elegiveis_abril_em_diante": pb_elegiveis,
+        },
+        "ci_elegiveis_amostra": ci_abril_sample,
+        "pro_bono_elegiveis_amostra": pb_abril_sample,
+        "config": {
+            "col_date_paying": config.COL_DATE_PAYING,
+            "col_date_pro_bono": config.COL_DATE_PRO_BONO,
+            "coach_ranking_start": str(config.COACH_RANKING_START_DATE),
+        },
+    }
 
 
 @router.post("/atualizar-planilha", response_model=AtualizarPlanilhaResponse)

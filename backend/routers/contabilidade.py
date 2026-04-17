@@ -131,7 +131,7 @@ def _process_group_records(
             num_participantes = max(1, int(raw_participantes))
         except (ValueError, AttributeError):
             num_participantes = 1
-        record_date = points_engine._parse_date(
+        record_date = points_engine.parse_date(
             row[config.COL_DATE_PAYING].strip() if config.COL_DATE_PAYING < len(row) else ""
         )
         coach_elegivel = record_date is not None and record_date >= config.COACH_RANKING_START_DATE
@@ -830,7 +830,7 @@ def debug_date_sample():
         modalidade = row[COL_MODALIDADE].strip() if COL_MODALIDADE < len(row) else ""
         coach = row[config.COL_COACH].strip() if config.COL_COACH < len(row) else ""
         raw_date = row[config.COL_DATE_PAYING] if config.COL_DATE_PAYING < len(row) else ""
-        parsed = points_engine._parse_date(raw_date)
+        parsed = points_engine.parse_date(raw_date)
         elegivel = parsed is None or parsed >= config.COACH_RANKING_START_DATE
 
         if modalidade.upper() == "COACHING INDIVIDUAL":
@@ -852,7 +852,7 @@ def debug_date_sample():
     for i, row in enumerate(rows_pb[1:], start=2):
         coach = row[config.COL_COACH].strip() if config.COL_COACH < len(row) else ""
         raw_date = row[config.COL_DATE_PRO_BONO] if config.COL_DATE_PRO_BONO < len(row) else ""
-        parsed = points_engine._parse_date(raw_date)
+        parsed = points_engine.parse_date(raw_date)
         elegivel = parsed is None or parsed >= config.COACH_RANKING_START_DATE
         pb_total += 1
         if elegivel:
@@ -909,7 +909,7 @@ def preencher_datas():
             for row in data_rows:
                 record_hash = points_engine.compute_record_hash(row, KEY_COLUMNS)
                 raw_date = row[config.COL_DATE_PAYING].strip() if config.COL_DATE_PAYING < len(row) else ""
-                parsed = points_engine._parse_date(raw_date)
+                parsed = points_engine.parse_date(raw_date)
                 val = str(parsed) if parsed else None
                 encontrado = supabase_client.update_data_registro(record_hash, val)
                 if encontrado:
@@ -926,7 +926,7 @@ def preencher_datas():
                     row, KEY_COLUMNS_PRO_BONO, prefix=HASH_PREFIX_PRO_BONO
                 )
                 raw_date = row[config.COL_DATE_PRO_BONO].strip() if config.COL_DATE_PRO_BONO < len(row) else ""
-                parsed = points_engine._parse_date(raw_date)
+                parsed = points_engine.parse_date(raw_date)
                 val = str(parsed) if parsed else None
                 encontrado = supabase_client.update_data_registro(record_hash, val)
                 if encontrado:

@@ -185,6 +185,9 @@ def _parse_date(raw: str):
         return None
 
 
+parse_date = _parse_date
+
+
 def filter_records_by_date_from(
     records: list[tuple[str, list[str]]],
     date_col: int,

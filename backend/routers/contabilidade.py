@@ -28,7 +28,7 @@ def _normalize_clan(clan_raw: str) -> str:
         return clan_raw.strip()
 
 
-def _build_and_insert(record_hash, row, header, data_rows, pontos, extra_fields=None):
+def _build_and_insert(record_hash, row, header, data_rows, pontos, extra_fields=None, date_col=None):
     row_number = data_rows.index(row) + 2 if row in data_rows else 0
     record_data = points_engine.build_record_data(
         record_hash=record_hash,
@@ -41,6 +41,7 @@ def _build_and_insert(record_hash, row, header, data_rows, pontos, extra_fields=
         sheet_name=config.GSHEET_RECORDS_SHEET_NAME,
         row_number=row_number,
         pontos=pontos,
+        date_col=date_col,
     )
     record_data["clan"] = _normalize_clan(record_data["clan"])
     if extra_fields:
@@ -48,7 +49,7 @@ def _build_and_insert(record_hash, row, header, data_rows, pontos, extra_fields=
     supabase_client.insert_processed_record(record_data)
 
 
-def _build_and_insert_pro_bono(record_hash, row, header, data_rows, pontos, extra_fields=None):
+def _build_and_insert_pro_bono(record_hash, row, header, data_rows, pontos, extra_fields=None, date_col=None):
     row_number = data_rows.index(row) + 2 if row in data_rows else 0
     record_data = points_engine.build_record_data(
         record_hash=record_hash,
@@ -61,6 +62,7 @@ def _build_and_insert_pro_bono(record_hash, row, header, data_rows, pontos, extr
         sheet_name=config.GSHEET_RECORDS_PRO_BONO_SHEET_NAME,
         row_number=row_number,
         pontos=pontos,
+        date_col=date_col,
     )
     record_data["modalidade"] = "Pro-bono"
     record_data["clan"] = _normalize_clan(record_data["clan"])
@@ -96,6 +98,7 @@ def _process_pro_bono_records(
                 "status_coach": "contabilizado",
                 "pontos_coach": config.POINTS_PER_PRO_BONO,
             },
+            date_col=config.COL_DATE_PRO_BONO,
         )
 
     raw_clan_pts = points_engine.calculate_points_by_clan(
@@ -140,6 +143,7 @@ def _process_group_records(
                 "status_coach": "pendente" if coach_elegivel else "contabilizado",
                 "pontos_coach": 0
             },
+            date_col=config.COL_DATE_PAYING,
         )
 
     clans_pendentes = supabase_client.get_all_pending_clans(GROUP_MODALIDADES)
@@ -262,6 +266,7 @@ def importar_registros():
                 record_hash, row, header, data_rows,
                 pontos=0,
                 extra_fields={"status": "contabilizado", "status_coach": "contabilizado", "pontos_coach": 0},
+                date_col=config.COL_DATE_PAYING,
             )
 
         return ImportarResponse(
@@ -426,7 +431,8 @@ def executar_contabilidade():
                 extra_fields={
                     "status_coach": "contabilizado",
                     "pontos_coach": config.POINTS_PER_COACHING_INDIVIDUAL
-                }
+                },
+                date_col=config.COL_DATE_PAYING,
             )
 
         raw_points = points_engine.calculate_points_by_clan(
@@ -532,7 +538,8 @@ def reprocessar_contabilidade():
                 extra_fields={
                     "status_coach": "contabilizado",
                     "pontos_coach": config.POINTS_PER_COACHING_INDIVIDUAL
-                }
+                },
+                date_col=config.COL_DATE_PAYING,
             )
 
         raw_points = points_engine.calculate_points_by_clan(
@@ -642,6 +649,7 @@ def importar_inicial():
                     "status_coach": "contabilizado",
                     "pontos_coach": 0,
                 },
+                date_col=config.COL_DATE_PAYING,
             )
 
         # Fase 4: Pré-calcular total de pessoas por clã e por coach nos registros de grupo.
@@ -701,6 +709,7 @@ def importar_inicial():
                     "num_participantes": num_participantes,
                     "pontos_coach": 0,
                 },
+                date_col=config.COL_DATE_PAYING,
             )
 
             if status == "contabilizado":
@@ -761,6 +770,7 @@ def importar_inicial():
                         "status_coach": "contabilizado",
                         "pontos_coach": 0,
                     },
+                    date_col=config.COL_DATE_PRO_BONO,
                 )
             pro_bono_importados = len(pb_records)
             # Os totais já foram semeados a partir da planilha de ranking (Fases 6 e 7).

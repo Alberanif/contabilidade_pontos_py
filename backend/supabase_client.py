@@ -100,6 +100,18 @@ def delete_all_registros() -> int:
     return len(result.data)
 
 
+def update_data_registro(registro_hash: str, data_registro) -> bool:
+    """Atualiza data_registro de um registro pelo hash. Retorna True se encontrou o registro."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .update({"data_registro": data_registro})
+        .eq("registro_hash", registro_hash)
+        .execute()
+    )
+    return len(result.data) > 0
+
+
 # --- Fila de grupo / empresa ---
 
 
@@ -479,3 +491,69 @@ def count_desafio_registros_by_desafio() -> dict[int, int]:
         did = row["desafio_id"]
         counts[did] = counts.get(did, 0) + 1
     return counts
+
+
+# --- Consultas históricas (filtradas por data_registro) ---
+
+
+def get_historico_clan_totals(ate: date) -> dict[str, int]:
+    """Soma pontos por clã para registros com data_registro <= ate e status=contabilizado."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .select("clan, pontos")
+        .eq("status", "contabilizado")
+        .lte("data_registro", str(ate))
+        .execute()
+    )
+    totals: dict[str, int] = {}
+    for row in result.data:
+        clan = row.get("clan") or ""
+        if clan:
+            totals[clan] = totals.get(clan, 0) + (row.get("pontos") or 0)
+    return totals
+
+
+def get_historico_coach_totals(ate: date) -> dict[str, int]:
+    """Soma pontos_coach por coach para registros com data_registro <= ate e status_coach=contabilizado."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .select("coach, pontos_coach")
+        .eq("status_coach", "contabilizado")
+        .lte("data_registro", str(ate))
+        .execute()
+    )
+    totals: dict[str, int] = {}
+    for row in result.data:
+        coach = row.get("coach") or ""
+        if coach and coach != "DESCONHECIDO":
+            totals[coach] = totals.get(coach, 0) + (row.get("pontos_coach") or 0)
+    return totals
+
+
+def get_historico_desafio_totals(ate: date) -> dict[str, int]:
+    """Soma total_pontos por clã para desafios com data <= ate e contabilizar_pontos=true."""
+    client = _get_client()
+    desafios_result = (
+        client.table(TABLE_DESAFIOS)
+        .select("id")
+        .eq("contabilizar_pontos", True)
+        .lte("data", str(ate))
+        .execute()
+    )
+    desafio_ids = [row["id"] for row in desafios_result.data]
+    if not desafio_ids:
+        return {}
+    registros_result = (
+        client.table(TABLE_DESAFIO_REGISTROS)
+        .select("clan, total_pontos")
+        .in_("desafio_id", desafio_ids)
+        .execute()
+    )
+    totals: dict[str, int] = {}
+    for row in registros_result.data:
+        clan = row.get("clan") or ""
+        if clan:
+            totals[clan] = totals.get(clan, 0) + (row.get("total_pontos") or 0)
+    return totals

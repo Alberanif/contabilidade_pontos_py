@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+from datetime import date
 
 import config
 import google_sheets_client
@@ -248,6 +249,11 @@ class PreencherDatasResponse(BaseModel):
     registros_atualizados: int
     registros_sem_data: int
     mensagem: str
+
+
+class HistoricoResponse(BaseModel):
+    clans: dict[str, int]
+    coaches: dict[str, int]
 
 
 @router.post("/importar", response_model=ImportarResponse)
@@ -934,5 +940,32 @@ def preencher_datas():
             registros_sem_data=sem_data,
             mensagem=f"Backfill concluído: {atualizados} registro(s) com data. {sem_data} sem data válida.",
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/historico", response_model=HistoricoResponse)
+def get_historico(ate: str = Query(..., description="Data de corte no formato YYYY-MM-DD")):
+    """Retorna totais de clãs e coaches acumulados até a data informada."""
+    try:
+        try:
+            ate_date = date.fromisoformat(ate)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Parâmetro 'ate' inválido. Use o formato YYYY-MM-DD (ex: 2026-04-15).",
+            )
+
+        clan_totals = supabase_client.get_historico_clan_totals(ate_date)
+        desafio_totals = supabase_client.get_historico_desafio_totals(ate_date)
+        coach_totals = supabase_client.get_historico_coach_totals(ate_date)
+
+        combined_clans: dict[str, int] = dict(clan_totals)
+        for clan, pontos in desafio_totals.items():
+            combined_clans[clan] = combined_clans.get(clan, 0) + pontos
+
+        return HistoricoResponse(clans=combined_clans, coaches=coach_totals)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

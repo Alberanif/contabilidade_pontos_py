@@ -497,39 +497,51 @@ def count_desafio_registros_by_desafio() -> dict[int, int]:
 
 
 def get_historico_clan_totals(ate: date) -> dict[str, int]:
-    """Soma pontos por clã para registros com data_registro <= ate e status=contabilizado."""
+    """Calcula totais por clã até `ate` subtraindo do total atual os pontos de registros
+    com data_registro > ate."""
     client = _get_client()
-    result = (
+
+    current_result = client.table(TABLE_TOTAIS).select("clan, total_pontos").execute()
+    current = {row["clan"]: row["total_pontos"] for row in current_result.data}
+
+    delta_result = (
         client.table(TABLE_REGISTROS)
         .select("clan, pontos")
-        .eq("status", "contabilizado")
-        .lte("data_registro", str(ate))
+        .gt("data_registro", str(ate))
         .execute()
     )
-    totals: dict[str, int] = {}
-    for row in result.data:
+    delta: dict[str, int] = {}
+    for row in delta_result.data:
         clan = row.get("clan") or ""
-        if clan:
-            totals[clan] = totals.get(clan, 0) + (row.get("pontos") or 0)
-    return totals
+        pts = row.get("pontos") or 0
+        if clan and pts > 0:
+            delta[clan] = delta.get(clan, 0) + pts
+
+    return {clan: max(0, total - delta.get(clan, 0)) for clan, total in current.items()}
 
 
 def get_historico_coach_totals(ate: date) -> dict[str, int]:
-    """Soma pontos_coach por coach para registros com data_registro <= ate e status_coach=contabilizado."""
+    """Calcula totais por coach até `ate` subtraindo do total atual os pontos_coach de
+    registros com data_registro > ate."""
     client = _get_client()
-    result = (
+
+    current_result = client.table(TABLE_TOTAIS_COACH).select("coach, total_pontos").execute()
+    current = {row["coach"]: row["total_pontos"] for row in current_result.data}
+
+    delta_result = (
         client.table(TABLE_REGISTROS)
         .select("coach, pontos_coach")
-        .eq("status_coach", "contabilizado")
-        .lte("data_registro", str(ate))
+        .gt("data_registro", str(ate))
         .execute()
     )
-    totals: dict[str, int] = {}
-    for row in result.data:
+    delta: dict[str, int] = {}
+    for row in delta_result.data:
         coach = row.get("coach") or ""
-        if coach and coach != "DESCONHECIDO":
-            totals[coach] = totals.get(coach, 0) + (row.get("pontos_coach") or 0)
-    return totals
+        pts = row.get("pontos_coach") or 0
+        if coach and coach != "DESCONHECIDO" and pts > 0:
+            delta[coach] = delta.get(coach, 0) + pts
+
+    return {coach: max(0, total - delta.get(coach, 0)) for coach, total in current.items()}
 
 
 def get_historico_desafio_totals(ate: date) -> dict[str, int]:

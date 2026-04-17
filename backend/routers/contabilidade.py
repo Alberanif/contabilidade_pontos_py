@@ -652,14 +652,19 @@ def importar_inicial():
             (points_engine.compute_record_hash(row, KEY_COLUMNS), row)
             for row in coaching_rows
         ]
+        coach_eligible_set = {
+            h for h, _ in points_engine.filter_records_by_date_from(
+                coaching_records, config.COL_DATE_PAYING, config.COACH_RANKING_START_DATE
+            )
+        }
         for record_hash, row in coaching_records:
             _build_and_insert(
                 record_hash, row, header, data_rows,
-                pontos=0,
+                pontos=config.POINTS_PER_COACHING_INDIVIDUAL,
                 extra_fields={
                     "status": "contabilizado",
                     "status_coach": "contabilizado",
-                    "pontos_coach": 0,
+                    "pontos_coach": config.POINTS_PER_COACHING_INDIVIDUAL if record_hash in coach_eligible_set else 0,
                 },
                 date_col=config.COL_DATE_PAYING,
             )
@@ -714,7 +719,7 @@ def importar_inicial():
 
             _build_and_insert(
                 record_hash, row, header, data_rows,
-                pontos=0,
+                pontos=config.POINTS_PER_RECORD_IN_BATCH if status == "contabilizado" else 0,
                 extra_fields={
                     "status": status,
                     "status_coach": status_coach,
@@ -776,7 +781,7 @@ def importar_inicial():
             for record_hash, row in pb_records:
                 _build_and_insert_pro_bono(
                     record_hash, row, pb_header, pb_data_rows,
-                    pontos=0,
+                    pontos=config.POINTS_PER_PRO_BONO,
                     extra_fields={
                         "status": "contabilizado",
                         "status_coach": "contabilizado",

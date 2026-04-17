@@ -100,7 +100,7 @@ def delete_all_registros() -> int:
     return len(result.data)
 
 
-def update_data_registro(registro_hash: str, data_registro) -> bool:
+def update_data_registro(registro_hash: str, data_registro: str | None) -> bool:
     """Atualiza data_registro de um registro pelo hash. Retorna True se encontrou o registro."""
     client = _get_client()
     result = (

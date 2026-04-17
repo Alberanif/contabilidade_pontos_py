@@ -197,6 +197,17 @@ export function atualizarPlanilha(): Promise<AtualizarPlanilhaResponse> {
   return request("/api/contabilidade/atualizar-planilha", { method: "POST" });
 }
 
+// --- Histórico ---
+
+export interface HistoricoResponse {
+  clans: Record<string, number>;
+  coaches: Record<string, number>;
+}
+
+export function fetchHistorico(ate: string): Promise<HistoricoResponse> {
+  return request(`/api/contabilidade/historico?ate=${encodeURIComponent(ate)}`);
+}
+
 // --- Desafios ---
 
 export interface DesafioCampo {

@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from points_engine import compute_batch_promotions_by_people
+from points_engine import compute_batch_promotions_by_people, build_record_data
 
 
 def make_records(counts: list[int]) -> list[dict]:
@@ -88,9 +88,6 @@ class TestComputeBatchPromotionsByPeople:
         assert ids == [1]
         assert lotes == 0
         assert carry == 4
-
-
-from points_engine import build_record_data
 
 
 def _make_row_and_header():

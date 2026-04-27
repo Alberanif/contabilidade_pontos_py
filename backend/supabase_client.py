@@ -616,3 +616,41 @@ def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
             totals[coach] = totals.get(coach, 0) + record["pontos_coach"]
 
     return totals
+
+
+def get_period_desafio_totals(inicio: date, fim: date) -> dict[str, int]:
+    """
+    Sum desafio points for desafios within the period [inicio, fim].
+    Only includes desafios with contabilizar_pontos=true.
+    Returns dict[clan_name, total_pontos].
+    """
+    client = _get_client()
+
+    # Fetch desafios in the period
+    desafios_query = (
+        client.table(TABLE_DESAFIOS)
+        .select("id")
+        .gte("data", inicio.isoformat())
+        .lte("data", fim.isoformat())
+        .eq("contabilizar_pontos", True)
+    )
+    desafios = desafios_query.execute().data
+    desafio_ids = [d["id"] for d in desafios]
+
+    if not desafio_ids:
+        return {}
+
+    # Fetch desafio_registros for those desafios
+    registros_query = (
+        client.table(TABLE_DESAFIO_REGISTROS)
+        .select("clan, total_pontos")
+        .in_("desafio_id", desafio_ids)
+    )
+    registros = registros_query.execute().data
+
+    totals = {}
+    for registro in registros:
+        clan = registro["clan"]
+        totals[clan] = totals.get(clan, 0) + registro["total_pontos"]
+
+    return totals

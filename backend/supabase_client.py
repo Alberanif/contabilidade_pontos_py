@@ -569,3 +569,26 @@ def get_historico_desafio_totals(ate: date) -> dict[str, int]:
         if clan:
             totals[clan] = totals.get(clan, 0) + (row.get("total_pontos") or 0)
     return totals
+
+
+def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
+    """
+    Sum all pontos for records within the period [inicio, fim].
+    Returns dict[clan_name, total_pontos].
+    """
+    client = _get_client()
+    query = (
+        client.table(TABLE_REGISTROS)
+        .select("clan, pontos")
+        .gte("data_registro", inicio.isoformat())
+        .lte("data_registro", fim.isoformat())
+        .eq("status", "contabilizado")
+    )
+    records = query.execute().data
+
+    totals = {}
+    for record in records:
+        clan = record["clan"]
+        totals[clan] = totals.get(clan, 0) + record["pontos"]
+
+    return totals

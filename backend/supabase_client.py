@@ -592,3 +592,27 @@ def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
         totals[clan] = totals.get(clan, 0) + record["pontos"]
 
     return totals
+
+
+def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
+    """
+    Sum all pontos_coach for records within the period [inicio, fim].
+    Returns dict[coach_name, total_pontos_coach].
+    """
+    client = _get_client()
+    query = (
+        client.table(TABLE_REGISTROS)
+        .select("coach, pontos_coach")
+        .gte("data_registro", inicio.isoformat())
+        .lte("data_registro", fim.isoformat())
+        .eq("status_coach", "contabilizado")
+    )
+    records = query.execute().data
+
+    totals = {}
+    for record in records:
+        coach = record["coach"]
+        if coach:  # Ignore null coaches
+            totals[coach] = totals.get(coach, 0) + record["pontos_coach"]
+
+    return totals

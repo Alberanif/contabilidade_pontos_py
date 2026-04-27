@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from datetime import date
+from datetime import date, datetime
 
 import config
 import google_sheets_client
@@ -950,26 +950,39 @@ def preencher_datas():
 
 
 @router.get("/historico", response_model=HistoricoResponse)
-def get_historico(ate: str = Query(..., description="Data de corte no formato YYYY-MM-DD")):
-    """Retorna totais de clãs e coaches acumulados até a data informada."""
+async def historico(inicio: str = Query(..., description="Data inicial no formato YYYY-MM-DD"), fim: str = Query(..., description="Data final no formato YYYY-MM-DD")):
+    """
+    Get ranking for a date period [inicio, fim].
+    Both dates required, ISO format (YYYY-MM-DD).
+    Returns summed points within period for clans and coaches.
+    """
     try:
+        # Validate both params present
+        if not inicio or not fim:
+            raise HTTPException(status_code=400, detail="inicio and fim are required")
+
         try:
-            ate_date = date.fromisoformat(ate)
+            inicio_date = datetime.fromisoformat(inicio).date()
+            fim_date = datetime.fromisoformat(fim).date()
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Parâmetro 'ate' inválido. Use o formato YYYY-MM-DD (ex: 2026-04-15).",
-            )
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
-        clan_totals = supabase_client.get_historico_clan_totals(ate_date)
-        desafio_totals = supabase_client.get_historico_desafio_totals(ate_date)
-        coach_totals = supabase_client.get_historico_coach_totals(ate_date)
+        # Validate inicio <= fim
+        if inicio_date > fim_date:
+            raise HTTPException(status_code=400, detail="inicio must be <= fim")
 
-        combined_clans: dict[str, int] = dict(clan_totals)
-        for clan, pontos in desafio_totals.items():
-            combined_clans[clan] = combined_clans.get(clan, 0) + pontos
+        # Get period totals
+        clan_totals = supabase_client.get_period_clan_totals(inicio_date, fim_date)
+        desafio_totals = supabase_client.get_period_desafio_totals(inicio_date, fim_date)
+        coach_totals = supabase_client.get_period_coach_totals(inicio_date, fim_date)
 
-        return HistoricoResponse(clans=combined_clans, coaches=coach_totals)
+        # Merge clan points + desafio points
+        all_clans = set(clan_totals.keys()) | set(desafio_totals.keys())
+        merged_clans = {}
+        for clan in all_clans:
+            merged_clans[clan] = clan_totals.get(clan, 0) + desafio_totals.get(clan, 0)
+
+        return HistoricoResponse(clans=merged_clans, coaches=coach_totals)
     except HTTPException:
         raise
     except Exception as e:

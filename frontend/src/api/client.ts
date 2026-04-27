@@ -204,8 +204,10 @@ export interface HistoricoResponse {
   coaches: Record<string, number>;
 }
 
-export function fetchHistorico(ate: string): Promise<HistoricoResponse> {
-  return request(`/api/contabilidade/historico?ate=${encodeURIComponent(ate)}`);
+export function fetchHistorico(inicio: string, fim: string): Promise<HistoricoResponse> {
+  return request(
+    `/api/contabilidade/historico?inicio=${encodeURIComponent(inicio)}&fim=${encodeURIComponent(fim)}`
+  );
 }
 
 // --- Desafios ---

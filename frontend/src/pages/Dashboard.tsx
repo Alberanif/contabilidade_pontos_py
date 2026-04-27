@@ -30,7 +30,8 @@ export default function Dashboard() {
   const [sheetMessage, setSheetMessage] = useState("");
   const [error, setError] = useState("");
 
-  const [dataCorte, setDataCorte] = useState<string>("");
+  const [dataInicio, setDataInicio] = useState<string>("");
+  const [dataFim, setDataFim] = useState<string>("");
   const [historicoData, setHistoricoData] = useState<HistoricoResponse | null>(null);
   const [loadingHistorico, setLoadingHistorico] = useState(false);
 
@@ -67,29 +68,32 @@ export default function Dashboard() {
     loadRanking();
   }, []);
 
-  const loadHistorico = async (ate: string) => {
-    try {
-      setLoadingHistorico(true);
-      setError("");
-      const data = await fetchHistorico(ate);
-      setHistoricoData(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao carregar histórico");
-      setHistoricoData(null);
-    } finally {
-      setLoadingHistorico(false);
+  useEffect(() => {
+    if (!dataInicio || !dataFim) {
+      return; // Don't fetch if either date is empty
     }
-  };
 
-  const handleDataCorteChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setDataCorte(val);
-    if (val) {
-      loadHistorico(val);
-    } else {
-      setHistoricoData(null);
+    if (dataInicio > dataFim) {
+      console.warn("Data início deve ser anterior a data fim");
+      return; // Don't fetch if dates are inverted
     }
-  };
+
+    const applyFilter = async () => {
+      try {
+        setLoadingHistorico(true);
+        setError("");
+        const data = await fetchHistorico(dataInicio, dataFim);
+        setHistoricoData(data);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Erro ao carregar histórico");
+        setHistoricoData(null);
+      } finally {
+        setLoadingHistorico(false);
+      }
+    };
+
+    applyFilter();
+  }, [dataInicio, dataFim]);
 
   const handleAtualizarPlanilha = async () => {
     try {
@@ -148,36 +152,52 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-        <label className="text-sm font-medium text-gray-700 whitespace-nowrap">
-          Ver ranking até:
-        </label>
-        <input
-          type="date"
-          value={dataCorte}
-          onChange={handleDataCorteChange}
-          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-        {dataCorte && (
-          <button
-            onClick={() => {
-              setDataCorte("");
-              setHistoricoData(null);
-            }}
-            className="text-sm text-gray-500 hover:text-gray-700 underline"
-          >
-            Limpar filtro
-          </button>
-        )}
+      <div className="flex gap-4 items-end mb-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            De:
+          </label>
+          <input
+            type="date"
+            value={dataInicio}
+            onChange={(e) => setDataInicio(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Até:
+          </label>
+          <input
+            type="date"
+            value={dataFim}
+            onChange={(e) => setDataFim(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg"
+          />
+        </div>
+        <button
+          onClick={() => {
+            setDataInicio("");
+            setDataFim("");
+            setHistoricoData(null);
+          }}
+          className="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400"
+        >
+          Limpar filtro
+        </button>
       </div>
 
-      {dataCorte && historicoData && (
+      {historicoData && (
         <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 rounded-lg text-sm">
-          Visualizando histórico até{" "}
+          Visualizando período de{" "}
           <strong>
-            {new Date(dataCorte + "T00:00:00").toLocaleDateString("pt-BR")}
+            {new Date(dataInicio + "T00:00:00").toLocaleDateString("pt-BR")}
           </strong>
-          . Os valores abaixo refletem o estado acumulado até essa data.
+          {" "}até{" "}
+          <strong>
+            {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
+          </strong>
+          . Os valores abaixo refletem os pontos acumulados nesse período.
         </div>
       )}
 
@@ -239,7 +259,7 @@ export default function Dashboard() {
             <div>
               <h3 className="text-lg font-semibold text-gray-700 mb-3">Pontos por Clã</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {(dataCorte && historicoData
+                {(historicoData
                   ? Object.entries(historicoData.clans).map(([clan, total_pontos], idx) => ({
                       id: idx,
                       clan,
@@ -266,7 +286,7 @@ export default function Dashboard() {
               }
 
               const clanSource: { clan: string; total_pontos: number }[] =
-                dataCorte && historicoData
+                historicoData
                   ? Object.entries(historicoData.clans).map(([clan, total_pontos]) => ({
                       clan,
                       total_pontos,
@@ -320,11 +340,11 @@ export default function Dashboard() {
           <h3 className="text-lg font-semibold text-gray-700 mb-3">Ranking de Coaches</h3>
           {loading ? (
             <p className="text-gray-500">Carregando coaches...</p>
-          ) : (dataCorte && historicoData ? Object.keys(historicoData.coaches).length === 0 : coaches.length === 0) ? (
+          ) : (historicoData ? Object.keys(historicoData.coaches).length === 0 : coaches.length === 0) ? (
             <p className="text-gray-500">Nenhum dado disponível.</p>
           ) : (() => {
             const coachSource: { coach: string; total_pontos: number }[] =
-              dataCorte && historicoData
+              historicoData
                 ? Object.entries(historicoData.coaches).map(([coach, total_pontos]) => ({
                     coach,
                     total_pontos,

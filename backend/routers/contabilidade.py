@@ -987,3 +987,40 @@ async def historico(inicio: str = Query(..., description="Data inicial no format
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/totais-por-tipo", response_model=HistoricoResponse)
+async def totais_por_tipo(
+    tipo: str = Query(..., description="pagante, pro_bono ou desafios"),
+    inicio: str | None = Query(None),
+    fim: str | None = Query(None),
+):
+    try:
+        if tipo not in ("pagante", "pro_bono", "desafios"):
+            raise HTTPException(
+                status_code=400,
+                detail="tipo deve ser pagante, pro_bono ou desafios",
+            )
+
+        inicio_date: date | None = None
+        fim_date: date | None = None
+        if inicio and fim:
+            try:
+                inicio_date = datetime.fromisoformat(inicio).date()
+                fim_date = datetime.fromisoformat(fim).date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, detail="Invalid date format. Use YYYY-MM-DD"
+                )
+            if inicio_date > fim_date:
+                raise HTTPException(
+                    status_code=400, detail="inicio must be <= fim"
+                )
+
+        clan_totals = supabase_client.get_tipo_clan_totals(tipo, inicio_date, fim_date)
+        coach_totals = supabase_client.get_tipo_coach_totals(tipo, inicio_date, fim_date)
+        return HistoricoResponse(clans=clan_totals, coaches=coach_totals)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

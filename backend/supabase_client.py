@@ -579,3 +579,94 @@ def get_period_desafio_totals(inicio: date, fim: date) -> dict[str, int]:
         totals[clan] = totals.get(clan, 0) + registro["total_pontos"]
 
     return totals
+
+
+def get_tipo_clan_totals(
+    tipo: str,
+    inicio: "date | None" = None,
+    fim: "date | None" = None,
+) -> dict[str, int]:
+    client = _get_client()
+
+    if tipo == "desafios":
+        if inicio and fim:
+            return get_period_desafio_totals(inicio, fim)
+        # All-time desafio totals
+        desafios = (
+            client.table(TABLE_DESAFIOS)
+            .select("id")
+            .eq("contabilizar_pontos", True)
+            .execute()
+            .data
+        )
+        desafio_ids = [d["id"] for d in desafios]
+        if not desafio_ids:
+            return {}
+        registros = (
+            client.table(TABLE_DESAFIO_REGISTROS)
+            .select("clan, total_pontos")
+            .in_("desafio_id", desafio_ids)
+            .execute()
+            .data
+        )
+        totals: dict[str, int] = {}
+        for r in registros:
+            totals[r["clan"]] = totals.get(r["clan"], 0) + r["total_pontos"]
+        return totals
+
+    query = (
+        client.table(TABLE_REGISTROS)
+        .select("clan, pontos, registro_hash")
+        .eq("status", "contabilizado")
+    )
+    if inicio and fim:
+        query = (
+            query
+            .gte("data_registro", inicio.isoformat())
+            .lte("data_registro", fim.isoformat())
+        )
+    records = query.execute().data
+
+    is_pro_bono = tipo == "pro_bono"
+    totals = {}
+    for rec in records:
+        h = rec.get("registro_hash", "")
+        if is_pro_bono != h.startswith("pro_bono:"):
+            continue
+        clan = rec["clan"]
+        totals[clan] = totals.get(clan, 0) + rec["pontos"]
+    return totals
+
+
+def get_tipo_coach_totals(
+    tipo: str,
+    inicio: "date | None" = None,
+    fim: "date | None" = None,
+) -> dict[str, int]:
+    if tipo == "desafios":
+        return {}
+
+    client = _get_client()
+    query = (
+        client.table(TABLE_REGISTROS)
+        .select("coach, pontos_coach, registro_hash")
+        .eq("status_coach", "contabilizado")
+    )
+    if inicio and fim:
+        query = (
+            query
+            .gte("data_registro", inicio.isoformat())
+            .lte("data_registro", fim.isoformat())
+        )
+    records = query.execute().data
+
+    is_pro_bono = tipo == "pro_bono"
+    totals: dict[str, int] = {}
+    for rec in records:
+        h = rec.get("registro_hash", "")
+        if is_pro_bono != h.startswith("pro_bono:"):
+            continue
+        coach = rec.get("coach")
+        if coach:
+            totals[coach] = totals.get(coach, 0) + rec["pontos_coach"]
+    return totals

@@ -4,6 +4,7 @@ import {
   fetchRanking,
   fetchCoaches,
   fetchHistorico,
+  fetchTotaisPorTipo,
   executarContabilidade,
   atualizarPlanilha,
   type ClanTotal,
@@ -15,6 +16,8 @@ import {
 import ClanCard from "../components/ClanCard";
 
 const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+
+type TipoFiltro = "todos" | "pagante" | "pro_bono" | "desafios";
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<"clans" | "coaches">("clans");
@@ -34,6 +37,10 @@ export default function Dashboard() {
   const [dataFim, setDataFim] = useState<string>("");
   const [historicoData, setHistoricoData] = useState<HistoricoResponse | null>(null);
   const [loadingHistorico, setLoadingHistorico] = useState(false);
+
+  const [tipoFiltro, setTipoFiltro] = useState<TipoFiltro>("todos");
+  const [tipoData, setTipoData] = useState<HistoricoResponse | null>(null);
+  const [loadingTipo, setLoadingTipo] = useState(false);
 
   const loadData = async () => {
     try {
@@ -69,8 +76,8 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!dataInicio || !dataFim) {
-      return; // Don't fetch if either date is empty
+    if (!dataInicio || !dataFim || tipoFiltro !== "todos") {
+      return; // Don't fetch if either date is empty or type filter is active
     }
 
     if (dataInicio > dataFim) {
@@ -93,7 +100,34 @@ export default function Dashboard() {
     };
 
     applyFilter();
-  }, [dataInicio, dataFim]);
+  }, [dataInicio, dataFim, tipoFiltro]);
+
+  useEffect(() => {
+    if (tipoFiltro === "todos") {
+      setTipoData(null);
+      return;
+    }
+    const fetchData = async () => {
+      try {
+        setLoadingTipo(true);
+        setError("");
+        const data = await fetchTotaisPorTipo(
+          tipoFiltro,
+          dataInicio || undefined,
+          dataFim || undefined
+        );
+        setTipoData(data);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Erro ao carregar dados por tipo");
+        setTipoData(null);
+      } finally {
+        setLoadingTipo(false);
+      }
+    };
+    fetchData();
+  }, [tipoFiltro, dataInicio, dataFim]);
+
+  const activeData = tipoFiltro !== "todos" ? tipoData : historicoData;
 
   const handleAtualizarPlanilha = async () => {
     try {
@@ -152,6 +186,30 @@ export default function Dashboard() {
         </div>
       )}
 
+      <div className="flex gap-2 flex-wrap mb-4">
+        {(["todos", "pagante", "pro_bono", "desafios"] as TipoFiltro[]).map((t) => {
+          const labels: Record<TipoFiltro, string> = {
+            todos: "Todos",
+            pagante: "Pagantes",
+            pro_bono: "Pro Bono",
+            desafios: "Desafios",
+          };
+          return (
+            <button
+              key={t}
+              onClick={() => setTipoFiltro(t)}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                tipoFiltro === t
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white text-gray-600 border-gray-300 hover:border-indigo-400"
+              }`}
+            >
+              {labels[t]}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex gap-4 items-end mb-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -187,22 +245,45 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {historicoData && (
+      {activeData && (tipoFiltro !== "todos" || (dataInicio && dataFim)) && (
         <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 rounded-lg text-sm">
-          Visualizando período de{" "}
-          <strong>
-            {new Date(dataInicio + "T00:00:00").toLocaleDateString("pt-BR")}
-          </strong>
-          {" "}até{" "}
-          <strong>
-            {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
-          </strong>
-          . Os valores abaixo refletem os pontos acumulados nesse período.
+          {tipoFiltro !== "todos" && (
+            <>
+              Visualizando <strong>{tipoFiltro.charAt(0).toUpperCase() + tipoFiltro.slice(1) === "Pagante" ? "Pagantes" : tipoFiltro === "pro_bono" ? "Pro Bono" : "Desafios"}</strong>
+              {dataInicio && dataFim && (
+                <>
+                  {" "}de{" "}
+                  <strong>
+                    {new Date(dataInicio + "T00:00:00").toLocaleDateString("pt-BR")}
+                  </strong>
+                  {" "}até{" "}
+                  <strong>
+                    {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
+                  </strong>
+                </>
+              )}
+              .
+            </>
+          )}
+          {tipoFiltro === "todos" && dataInicio && dataFim && (
+            <>
+              Visualizando período de{" "}
+              <strong>
+                {new Date(dataInicio + "T00:00:00").toLocaleDateString("pt-BR")}
+              </strong>
+              {" "}até{" "}
+              <strong>
+                {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
+              </strong>
+              .
+            </>
+          )}
+          {" Os valores abaixo refletem os dados filtrados."}
         </div>
       )}
 
-      {loadingHistorico && (
-        <p className="text-gray-500 text-sm">Carregando histórico...</p>
+      {(loadingHistorico || loadingTipo) && (
+        <p className="text-gray-500 text-sm">Carregando dados...</p>
       )}
 
       {sheetMessage && (
@@ -259,8 +340,8 @@ export default function Dashboard() {
             <div>
               <h3 className="text-lg font-semibold text-gray-700 mb-3">Pontos por Clã</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {(historicoData
-                  ? Object.entries(historicoData.clans).map(([clan, total_pontos], idx) => ({
+                {(activeData
+                  ? Object.entries(activeData.clans).map(([clan, total_pontos], idx) => ({
                       id: idx,
                       clan,
                       total_pontos,
@@ -286,8 +367,8 @@ export default function Dashboard() {
               }
 
               const clanSource: { clan: string; total_pontos: number }[] =
-                historicoData
-                  ? Object.entries(historicoData.clans).map(([clan, total_pontos]) => ({
+                activeData
+                  ? Object.entries(activeData.clans).map(([clan, total_pontos]) => ({
                       clan,
                       total_pontos,
                     }))
@@ -338,14 +419,16 @@ export default function Dashboard() {
       {activeTab === "coaches" && (
         <div className="mt-8">
           <h3 className="text-lg font-semibold text-gray-700 mb-3">Ranking de Coaches</h3>
-          {loading ? (
+          {tipoFiltro === "desafios" ? (
+            <p className="text-gray-500 text-sm italic">Desafios não registram pontos por coach.</p>
+          ) : loading ? (
             <p className="text-gray-500">Carregando coaches...</p>
-          ) : (historicoData ? Object.keys(historicoData.coaches).length === 0 : coaches.length === 0) ? (
+          ) : (activeData ? Object.keys(activeData.coaches).length === 0 : coaches.length === 0) ? (
             <p className="text-gray-500">Nenhum dado disponível.</p>
           ) : (() => {
             const coachSource: { coach: string; total_pontos: number }[] =
-              historicoData
-                ? Object.entries(historicoData.coaches).map(([coach, total_pontos]) => ({
+              activeData
+                ? Object.entries(activeData.coaches).map(([coach, total_pontos]) => ({
                     coach,
                     total_pontos,
                   }))

@@ -210,6 +210,17 @@ export function fetchHistorico(inicio: string, fim: string): Promise<HistoricoRe
   );
 }
 
+export function fetchTotaisPorTipo(
+  tipo: "pagante" | "pro_bono" | "desafios",
+  inicio?: string,
+  fim?: string
+): Promise<HistoricoResponse> {
+  const params = new URLSearchParams({ tipo });
+  if (inicio) params.set("inicio", inicio);
+  if (fim) params.set("fim", fim);
+  return request(`/api/contabilidade/totais-por-tipo?${params}`);
+}
+
 // --- Desafios ---
 
 export interface DesafioCampo {

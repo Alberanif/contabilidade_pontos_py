@@ -653,13 +653,23 @@ def get_tipo_clan_totals(
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"
-    totals = {}
+    group_raw: dict[str, int] = {}
+    totals: dict[str, int] = {}
     for rec in records:
         h = rec.get("registro_hash", "")
         if is_pro_bono != h.startswith("pro_bono:"):
             continue
         clan = rec["clan"]
-        totals[clan] = totals.get(clan, 0) + rec["pontos"]
+        p = rec["pontos"]
+        if p == config.POINTS_PER_RECORD_IN_BATCH:
+            group_raw[clan] = group_raw.get(clan, 0) + p
+        else:
+            totals[clan] = totals.get(clan, 0) + p
+
+    for clan, g in group_raw.items():
+        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
+        if complete:
+            totals[clan] = totals.get(clan, 0) + complete
     return totals
 
 
@@ -686,12 +696,23 @@ def get_tipo_coach_totals(
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"
+    group_raw: dict[str, int] = {}
     totals: dict[str, int] = {}
     for rec in records:
         h = rec.get("registro_hash", "")
         if is_pro_bono != h.startswith("pro_bono:"):
             continue
         coach = rec.get("coach")
-        if coach:
-            totals[coach] = totals.get(coach, 0) + rec["pontos_coach"]
+        if not coach:
+            continue
+        p = rec["pontos_coach"]
+        if p == config.POINTS_PER_RECORD_IN_BATCH:
+            group_raw[coach] = group_raw.get(coach, 0) + p
+        else:
+            totals[coach] = totals.get(coach, 0) + p
+
+    for coach, g in group_raw.items():
+        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
+        if complete:
+            totals[coach] = totals.get(coach, 0) + complete
     return totals

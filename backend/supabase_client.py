@@ -499,6 +499,8 @@ def count_desafio_registros_by_desafio() -> dict[int, int]:
 def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
     """
     Sum all pontos for records within the period [inicio, fim].
+    Group coaching records (pontos == POINTS_PER_RECORD_IN_BATCH) are floored
+    to the nearest complete batch — partial batches are discarded.
     Returns dict[clan_name, total_pontos].
     """
     client = _get_client()
@@ -511,10 +513,20 @@ def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
     )
     records = query.execute().data
 
-    totals = {}
+    group_raw: dict[str, int] = {}
+    totals: dict[str, int] = {}
     for record in records:
         clan = record["clan"]
-        totals[clan] = totals.get(clan, 0) + record["pontos"]
+        p = record["pontos"]
+        if p == config.POINTS_PER_RECORD_IN_BATCH:
+            group_raw[clan] = group_raw.get(clan, 0) + p
+        else:
+            totals[clan] = totals.get(clan, 0) + p
+
+    for clan, g in group_raw.items():
+        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
+        if complete:
+            totals[clan] = totals.get(clan, 0) + complete
 
     return totals
 
@@ -522,6 +534,8 @@ def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
 def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
     """
     Sum all pontos_coach for records within the period [inicio, fim].
+    Group coaching records (pontos_coach == POINTS_PER_RECORD_IN_BATCH) are floored
+    to the nearest complete batch — partial batches are discarded.
     Returns dict[coach_name, total_pontos_coach].
     """
     client = _get_client()
@@ -534,11 +548,22 @@ def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
     )
     records = query.execute().data
 
-    totals = {}
+    group_raw: dict[str, int] = {}
+    totals: dict[str, int] = {}
     for record in records:
         coach = record["coach"]
-        if coach:  # Ignore null coaches
-            totals[coach] = totals.get(coach, 0) + record["pontos_coach"]
+        if not coach:
+            continue
+        p = record["pontos_coach"]
+        if p == config.POINTS_PER_RECORD_IN_BATCH:
+            group_raw[coach] = group_raw.get(coach, 0) + p
+        else:
+            totals[coach] = totals.get(coach, 0) + p
+
+    for coach, g in group_raw.items():
+        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
+        if complete:
+            totals[coach] = totals.get(coach, 0) + complete
 
     return totals
 

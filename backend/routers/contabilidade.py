@@ -307,8 +307,15 @@ def aprovar_clan(body: AprovarClanRequest):
 
         if n_complete == 0:
             accumulated = carry_over + sum(r.get("num_participantes", 1) for r in pending)
-            current_total = supabase_client.get_clan_totals().get(clan, 0)
-            supabase_client.upsert_clan_total(clan, current_total, pessoas_em_espera=accumulated)
+            existing = {r["clan"]: r for r in supabase_client.list_clan_totals()}
+            row = existing.get(clan, {})
+            current_total = row.get("total_pontos") or 0
+            supabase_client.upsert_clan_total(
+                clan, current_total,
+                pessoas_em_espera=accumulated,
+                total_pagante=(row.get("total_pagante") or 0),
+                total_pro_bono=(row.get("total_pro_bono") or 0),
+            )
             return AprovarClanResponse(
                 clan=clan,
                 lotes_aprovados=0,
@@ -327,9 +334,15 @@ def aprovar_clan(body: AprovarClanRequest):
             ids_to_promote, config.POINTS_PER_RECORD_IN_BATCH
         )
         pontos_adicionados = n_complete * config.POINTS_PER_BATCH_GROUP
-        current_totals = supabase_client.get_clan_totals()
-        novo_total = current_totals.get(clan, 0) + pontos_adicionados
-        supabase_client.upsert_clan_total(clan, novo_total, pessoas_em_espera=novo_carry_over)
+        existing = {r["clan"]: r for r in supabase_client.list_clan_totals()}
+        row = existing.get(clan, {})
+        novo_total = (row.get("total_pontos") or 0) + pontos_adicionados
+        supabase_client.upsert_clan_total(
+            clan, novo_total,
+            pessoas_em_espera=novo_carry_over,
+            total_pagante=(row.get("total_pagante") or 0) + pontos_adicionados,
+            total_pro_bono=(row.get("total_pro_bono") or 0),
+        )
 
         pendentes_restantes = len(pending) - len(ids_to_promote)
 
@@ -367,8 +380,15 @@ def aprovar_coach(body: AprovarCoachRequest):
 
         if n_complete == 0:
             accumulated = carry_over + sum(r.get("num_participantes", 1) for r in pending)
-            current_total = supabase_client.get_coach_totals().get(coach, 0)
-            supabase_client.upsert_coach_total(coach, current_total, pessoas_em_espera=accumulated)
+            existing = {r["coach"]: r for r in supabase_client.list_coach_totals()}
+            row = existing.get(coach, {})
+            current_total = row.get("total_pontos") or 0
+            supabase_client.upsert_coach_total(
+                coach, current_total,
+                pessoas_em_espera=accumulated,
+                total_pagante=(row.get("total_pagante") or 0),
+                total_pro_bono=(row.get("total_pro_bono") or 0),
+            )
             return AprovarCoachResponse(
                 coach=coach,
                 lotes_aprovados=0,
@@ -387,9 +407,15 @@ def aprovar_coach(body: AprovarCoachRequest):
             ids_to_promote, config.POINTS_PER_RECORD_IN_BATCH
         )
         pontos_adicionados = n_complete * config.POINTS_PER_BATCH_GROUP
-        current_totals = supabase_client.get_coach_totals()
-        novo_total = current_totals.get(coach, 0) + pontos_adicionados
-        supabase_client.upsert_coach_total(coach, novo_total, pessoas_em_espera=novo_carry_over)
+        existing = {r["coach"]: r for r in supabase_client.list_coach_totals()}
+        row = existing.get(coach, {})
+        novo_total = (row.get("total_pontos") or 0) + pontos_adicionados
+        supabase_client.upsert_coach_total(
+            coach, novo_total,
+            pessoas_em_espera=novo_carry_over,
+            total_pagante=(row.get("total_pagante") or 0) + pontos_adicionados,
+            total_pro_bono=(row.get("total_pro_bono") or 0),
+        )
 
         pendentes_restantes = len(pending) - len(ids_to_promote)
 

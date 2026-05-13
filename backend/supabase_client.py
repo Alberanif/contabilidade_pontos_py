@@ -212,15 +212,26 @@ def list_clan_totals() -> list[dict]:
     return result.data
 
 
-def upsert_clan_total(clan: str, total: int, pessoas_em_espera: int | None = None) -> dict:
+def upsert_clan_total(
+    clan: str,
+    total: int,
+    pessoas_em_espera: int | None = None,
+    total_pagante: int | None = None,
+    total_pro_bono: int | None = None,
+) -> dict:
     """Atualiza ou insere o total de pontos de um clã.
 
     Se pessoas_em_espera for informado, também atualiza o carry-over.
+    Se total_pagante/total_pro_bono for informado, atualiza o breakdown por tipo.
     """
     client = _get_client()
     payload: dict = {"clan": clan, "total_pontos": total}
     if pessoas_em_espera is not None:
         payload["pessoas_em_espera"] = pessoas_em_espera
+    if total_pagante is not None:
+        payload["total_pagante"] = total_pagante
+    if total_pro_bono is not None:
+        payload["total_pro_bono"] = total_pro_bono
     result = client.table(TABLE_TOTAIS).upsert(
         payload,
         on_conflict="clan",
@@ -264,15 +275,26 @@ def list_coach_totals() -> list[dict]:
     return result.data
 
 
-def upsert_coach_total(coach: str, total: int, pessoas_em_espera: int | None = None) -> dict:
+def upsert_coach_total(
+    coach: str,
+    total: int,
+    pessoas_em_espera: int | None = None,
+    total_pagante: int | None = None,
+    total_pro_bono: int | None = None,
+) -> dict:
     """Atualiza ou insere o total de pontos de um coach.
 
     Se pessoas_em_espera for informado, também atualiza o carry-over.
+    Se total_pagante/total_pro_bono for informado, atualiza o breakdown por tipo.
     """
     client = _get_client()
     payload: dict = {"coach": coach, "total_pontos": total}
     if pessoas_em_espera is not None:
         payload["pessoas_em_espera"] = pessoas_em_espera
+    if total_pagante is not None:
+        payload["total_pagante"] = total_pagante
+    if total_pro_bono is not None:
+        payload["total_pro_bono"] = total_pro_bono
     result = client.table(TABLE_TOTAIS_COACH).upsert(
         payload,
         on_conflict="coach",
@@ -616,7 +638,6 @@ def get_tipo_clan_totals(
     if tipo == "desafios":
         if inicio and fim:
             return get_period_desafio_totals(inicio, fim)
-        # All-time desafio totals
         desafios = (
             client.table(TABLE_DESAFIOS)
             .select("id")
@@ -639,22 +660,30 @@ def get_tipo_clan_totals(
             totals[r["clan"]] = totals.get(r["clan"], 0) + r["total_pontos"]
         return totals
 
+    # Without date filter: read breakdown columns from TABLE_TOTAIS
+    if not (inicio and fim):
+        col = "total_pagante" if tipo == "pagante" else "total_pro_bono"
+        rows = (
+            client.table(TABLE_TOTAIS)
+            .select(f"clan, {col}")
+            .execute()
+            .data
+        )
+        return {r["clan"]: r[col] for r in rows if r.get(col, 0) > 0}
+
+    # With date filter: sum from TABLE_REGISTROS (period-based, existing behavior)
     query = (
         client.table(TABLE_REGISTROS)
         .select("clan, pontos, registro_hash")
         .eq("status", "contabilizado")
+        .gte("data_registro", inicio.isoformat())
+        .lte("data_registro", fim.isoformat())
     )
-    if inicio and fim:
-        query = (
-            query
-            .gte("data_registro", inicio.isoformat())
-            .lte("data_registro", fim.isoformat())
-        )
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"
     group_raw: dict[str, int] = {}
-    totals: dict[str, int] = {}
+    totals = {}
     for rec in records:
         h = rec.get("registro_hash", "")
         if is_pro_bono != h.startswith("pro_bono:"):
@@ -682,17 +711,26 @@ def get_tipo_coach_totals(
         return {}
 
     client = _get_client()
+
+    # Without date filter: read breakdown columns from TABLE_TOTAIS_COACH
+    if not (inicio and fim):
+        col = "total_pagante" if tipo == "pagante" else "total_pro_bono"
+        rows = (
+            client.table(TABLE_TOTAIS_COACH)
+            .select(f"coach, {col}")
+            .execute()
+            .data
+        )
+        return {r["coach"]: r[col] for r in rows if r.get(col, 0) > 0}
+
+    # With date filter: sum from TABLE_REGISTROS (period-based, existing behavior)
     query = (
         client.table(TABLE_REGISTROS)
         .select("coach, pontos_coach, registro_hash")
         .eq("status_coach", "contabilizado")
+        .gte("data_registro", inicio.isoformat())
+        .lte("data_registro", fim.isoformat())
     )
-    if inicio and fim:
-        query = (
-            query
-            .gte("data_registro", inicio.isoformat())
-            .lte("data_registro", fim.isoformat())
-        )
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"

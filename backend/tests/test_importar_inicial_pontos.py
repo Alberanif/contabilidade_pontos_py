@@ -86,6 +86,7 @@ def _run_import(ci_rows=None, group_rows=None, pb_rows=None, ranking=None):
         mock_supa.reset_all_totals.return_value = None
         mock_supa.upsert_clan_total.return_value = None
         mock_supa.upsert_coach_total.return_value = None
+        mock_supa.get_tipo_clan_totals.return_value = {}
         mock_supa.insert_processed_record.side_effect = capture_insert
 
         mock_gsc.fetch_records.return_value = [HEADER] + ci_rows + group_rows

@@ -786,17 +786,36 @@ def importar_inicial():
         ranking = google_sheets_client.fetch_ranking()
         clan_totals_from_sheet = {r["clan"]: r["total_pontos"] for r in ranking}
 
+        # Pré-buscar pro-bono para calcular breakdown antes de semear totais
+        pb_rows_seed = google_sheets_client.fetch_records_pro_bono()
+        pro_bono_by_clan: dict[str, int] = {}
+        if pb_rows_seed:
+            pb_data_seed = pb_rows_seed[1:]
+            for row in pb_data_seed:
+                clan = _normalize_clan(row[COL_CLAN]) if COL_CLAN < len(row) else "DESCONHECIDO"
+                pro_bono_by_clan[clan] = pro_bono_by_clan.get(clan, 0) + config.POINTS_PER_PRO_BONO
+
+        desafio_by_clan = supabase_client.get_tipo_clan_totals("desafios")
+
         # Fase 6: Totais e carry-over por clã.
         # - Lote completo: carry_over = total_pessoas % BATCH_SIZE (sobra do último lote)
         # - Sem lote completo: carry_over = 0 (as pessoas pendentes ficam nos registros, não no carry-over)
         carry_over_por_clan: dict[str, int] = {}
         all_clans = set(clan_totals_from_sheet.keys()) | set(clan_group_people.keys())
         for clan in all_clans:
-            total = clan_totals_from_sheet.get(clan, 0)
+            official = clan_totals_from_sheet.get(clan, 0)
+            pro_bono = pro_bono_by_clan.get(clan, 0)
+            desafio = desafio_by_clan.get(clan, 0)
+            pagante = max(0, official - pro_bono - desafio)
             pessoas = clan_group_people.get(clan, 0)
             carry_over = pessoas % config.BATCH_SIZE_GROUP if clan in clans_com_lote else 0
             carry_over_por_clan[clan] = carry_over
-            supabase_client.upsert_clan_total(clan, total, pessoas_em_espera=carry_over)
+            supabase_client.upsert_clan_total(
+                clan, official,
+                pessoas_em_espera=carry_over,
+                total_pagante=pagante,
+                total_pro_bono=pro_bono,
+            )
 
         # Fase 7: Totais e carry-over por coach.
         # Apenas registros >= COACH_RANKING_START_DATE contam para pontuação de coaches.
@@ -814,10 +833,15 @@ def importar_inicial():
             pessoas = coach_group_people.get(coach, 0)
             carry_over = pessoas % config.BATCH_SIZE_GROUP if coach in coaches_com_lote else 0
             carry_over_por_coach[coach] = carry_over
-            supabase_client.upsert_coach_total(coach, total, pessoas_em_espera=carry_over)
+            supabase_client.upsert_coach_total(
+                coach, total,
+                pessoas_em_espera=carry_over,
+                total_pagante=total,   # all coach points are pagante
+                total_pro_bono=0,
+            )
 
         # Fase 8: Importar registros Pro-bono como contabilizado (10 pts cada, sem fila)
-        pb_rows = google_sheets_client.fetch_records_pro_bono()
+        pb_rows = pb_rows_seed
         pro_bono_importados = 0
         if pb_rows:
             pb_header = pb_rows[0]

@@ -469,12 +469,14 @@ def executar_contabilidade():
         n_pro_bono, pro_bono_clan_pts, pro_bono_coach_pts = _process_pro_bono_records(processed_hashes)
 
         pagante_new: dict[str, int] = {}
-        for clan, pts in {**pontos_por_clan, **pontos_grupo_por_clan}.items():
-            pagante_new[clan] = pagante_new.get(clan, 0) + pts
+        for source in (pontos_por_clan, pontos_grupo_por_clan):
+            for clan, pts in source.items():
+                pagante_new[clan] = pagante_new.get(clan, 0) + pts
 
         all_new_points: dict[str, int] = {}
-        for clan, pts in {**pagante_new, **pro_bono_clan_pts}.items():
-            all_new_points[clan] = all_new_points.get(clan, 0) + pts
+        for source in (pagante_new, pro_bono_clan_pts):
+            for clan, pts in source.items():
+                all_new_points[clan] = all_new_points.get(clan, 0) + pts
 
         if all_new_points:
             existing_clans = {r["clan"]: r for r in supabase_client.list_clan_totals()}
@@ -493,11 +495,10 @@ def executar_contabilidade():
         else:
             totais_atualizados = {}
 
-        pagante_coach_pts: dict[str, int] = pontos_por_coach
-
         all_coach_points: dict[str, int] = {}
-        for coach, pts in {**pagante_coach_pts, **pro_bono_coach_pts}.items():
-            all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
+        for source in (pontos_por_coach, pro_bono_coach_pts):
+            for coach, pts in source.items():
+                all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
         if all_coach_points:
             existing_coaches = {r["coach"]: r for r in supabase_client.list_coach_totals()}
@@ -506,7 +507,7 @@ def executar_contabilidade():
                 supabase_client.upsert_coach_total(
                     coach,
                     (row.get("total_pontos") or 0) + new_points,
-                    total_pagante=(row.get("total_pagante") or 0) + pagante_coach_pts.get(coach, 0),
+                    total_pagante=(row.get("total_pagante") or 0) + pontos_por_coach.get(coach, 0),
                     total_pro_bono=(row.get("total_pro_bono") or 0) + pro_bono_coach_pts.get(coach, 0),
                 )
 

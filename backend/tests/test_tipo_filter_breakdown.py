@@ -51,6 +51,17 @@ class TestGetTipoClanTotalsNoDate:
             result = supabase_client.get_tipo_clan_totals("pagante")
         assert result == {"CLÃ 2": 600}
 
+    def test_null_column_excluded(self):
+        rows = [
+            {"clan": "CLÃ 1", "total_pagante": None, "total_pro_bono": 200},
+            {"clan": "CLÃ 2", "total_pagante": 600, "total_pro_bono": None},
+        ]
+        with patch("supabase_client._get_client", return_value=_mock_totais(rows)):
+            pagante = supabase_client.get_tipo_clan_totals("pagante")
+            pro_bono = supabase_client.get_tipo_clan_totals("pro_bono")
+        assert pagante == {"CLÃ 2": 600}
+        assert pro_bono == {"CLÃ 1": 200}
+
 
 class TestGetTipoCoachTotalsNoDate:
     """Sem datas: deve ler total_pagante / total_pro_bono de TABLE_TOTAIS_COACH."""
@@ -66,3 +77,18 @@ class TestGetTipoCoachTotalsNoDate:
         with patch("supabase_client._get_client", return_value=_mock_totais(rows)):
             result = supabase_client.get_tipo_coach_totals("pagante")
         assert result == {}
+
+    def test_pro_bono_reads_total_pro_bono(self):
+        rows = [{"coach": "Coach A", "total_pagante": 900, "total_pro_bono": 150}]
+        with patch("supabase_client._get_client", return_value=_mock_totais(rows)):
+            result = supabase_client.get_tipo_coach_totals("pro_bono")
+        assert result == {"Coach A": 150}
+
+    def test_multiple_coaches(self):
+        rows = [
+            {"coach": "Coach A", "total_pagante": 900, "total_pro_bono": 0},
+            {"coach": "Coach B", "total_pagante": 600, "total_pro_bono": 100},
+        ]
+        with patch("supabase_client._get_client", return_value=_mock_totais(rows)):
+            result = supabase_client.get_tipo_coach_totals("pagante")
+        assert result == {"Coach A": 900, "Coach B": 600}

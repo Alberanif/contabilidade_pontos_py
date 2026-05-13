@@ -662,14 +662,19 @@ def get_tipo_clan_totals(
 
     # Without date filter: read breakdown columns from TABLE_TOTAIS
     if not (inicio and fim):
-        col = "total_pagante" if tipo == "pagante" else "total_pro_bono"
+        if tipo == "pagante":
+            col = "total_pagante"
+        elif tipo == "pro_bono":
+            col = "total_pro_bono"
+        else:
+            raise ValueError(f"tipo inválido para totais por tipo: {tipo!r}")
         rows = (
             client.table(TABLE_TOTAIS)
             .select(f"clan, {col}")
             .execute()
             .data
         )
-        return {r["clan"]: r[col] for r in rows if r.get(col, 0) > 0}
+        return {r["clan"]: r[col] for r in rows if (r.get(col) or 0) > 0}
 
     # With date filter: sum from TABLE_REGISTROS (period-based, existing behavior)
     query = (
@@ -683,7 +688,7 @@ def get_tipo_clan_totals(
 
     is_pro_bono = tipo == "pro_bono"
     group_raw: dict[str, int] = {}
-    totals = {}
+    totals: dict[str, int] = {}
     for rec in records:
         h = rec.get("registro_hash", "")
         if is_pro_bono != h.startswith("pro_bono:"):
@@ -714,14 +719,19 @@ def get_tipo_coach_totals(
 
     # Without date filter: read breakdown columns from TABLE_TOTAIS_COACH
     if not (inicio and fim):
-        col = "total_pagante" if tipo == "pagante" else "total_pro_bono"
+        if tipo == "pagante":
+            col = "total_pagante"
+        elif tipo == "pro_bono":
+            col = "total_pro_bono"
+        else:
+            raise ValueError(f"tipo inválido para totais por tipo: {tipo!r}")
         rows = (
             client.table(TABLE_TOTAIS_COACH)
             .select(f"coach, {col}")
             .execute()
             .data
         )
-        return {r["coach"]: r[col] for r in rows if r.get(col, 0) > 0}
+        return {r["coach"]: r[col] for r in rows if (r.get(col) or 0) > 0}
 
     # With date filter: sum from TABLE_REGISTROS (period-based, existing behavior)
     query = (

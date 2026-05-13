@@ -468,26 +468,47 @@ def executar_contabilidade():
         processed_hashes = supabase_client.get_processed_hashes()
         n_pro_bono, pro_bono_clan_pts, pro_bono_coach_pts = _process_pro_bono_records(processed_hashes)
 
+        pagante_new: dict[str, int] = {}
+        for clan, pts in {**pontos_por_clan, **pontos_grupo_por_clan}.items():
+            pagante_new[clan] = pagante_new.get(clan, 0) + pts
+
         all_new_points: dict[str, int] = {}
-        for clan, pts in {**pontos_por_clan, **pontos_grupo_por_clan, **pro_bono_clan_pts}.items():
+        for clan, pts in {**pagante_new, **pro_bono_clan_pts}.items():
             all_new_points[clan] = all_new_points.get(clan, 0) + pts
 
         if all_new_points:
-            current_totals = supabase_client.get_clan_totals()
+            existing_clans = {r["clan"]: r for r in supabase_client.list_clan_totals()}
             for clan, new_points in all_new_points.items():
-                supabase_client.upsert_clan_total(clan, current_totals.get(clan, 0) + new_points)
-            totais_atualizados = {clan: current_totals.get(clan, 0) + pts for clan, pts in all_new_points.items()}
+                row = existing_clans.get(clan, {})
+                supabase_client.upsert_clan_total(
+                    clan,
+                    (row.get("total_pontos") or 0) + new_points,
+                    total_pagante=(row.get("total_pagante") or 0) + pagante_new.get(clan, 0),
+                    total_pro_bono=(row.get("total_pro_bono") or 0) + pro_bono_clan_pts.get(clan, 0),
+                )
+            totais_atualizados = {
+                clan: (existing_clans.get(clan, {}).get("total_pontos") or 0) + pts
+                for clan, pts in all_new_points.items()
+            }
         else:
             totais_atualizados = {}
 
+        pagante_coach_pts: dict[str, int] = pontos_por_coach
+
         all_coach_points: dict[str, int] = {}
-        for coach, pts in {**pontos_por_coach, **pro_bono_coach_pts}.items():
+        for coach, pts in {**pagante_coach_pts, **pro_bono_coach_pts}.items():
             all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
         if all_coach_points:
-            current_coach_totals = supabase_client.get_coach_totals()
+            existing_coaches = {r["coach"]: r for r in supabase_client.list_coach_totals()}
             for coach, new_points in all_coach_points.items():
-                supabase_client.upsert_coach_total(coach, current_coach_totals.get(coach, 0) + new_points)
+                row = existing_coaches.get(coach, {})
+                supabase_client.upsert_coach_total(
+                    coach,
+                    (row.get("total_pontos") or 0) + new_points,
+                    total_pagante=(row.get("total_pagante") or 0) + pagante_coach_pts.get(coach, 0),
+                    total_pro_bono=(row.get("total_pro_bono") or 0) + pro_bono_coach_pts.get(coach, 0),
+                )
 
         partes = []
         if new_records:

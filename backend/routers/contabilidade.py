@@ -106,11 +106,8 @@ def _process_pro_bono_records(
         new_records, COL_CLAN, config.POINTS_PER_PRO_BONO
     )
     pontos_por_clan = {_normalize_clan(k): v for k, v in raw_clan_pts.items()}
-    coach_eligible_pb = points_engine.filter_records_by_date_from(
-        new_records, config.COL_DATE_PRO_BONO, config.COACH_RANKING_START_DATE
-    )
     pontos_por_coach = points_engine.calculate_points_by_coach(
-        coach_eligible_pb, COL_COACH, config.POINTS_PER_PRO_BONO
+        new_records, COL_COACH, config.POINTS_PER_PRO_BONO
     )
     return len(new_records), pontos_por_clan, pontos_por_coach
 
@@ -841,19 +838,16 @@ def importar_inicial():
             coach_eligible_seed, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
 
-        # Pontos Pro-bono elegíveis para coaches (data >= COACH_RANKING_START_DATE)
+        # Pontos Pro-bono para coaches (todas as datas, sem restrição)
         pb_data_for_coach = pb_rows_seed[1:] if pb_rows_seed else []
         pb_records_for_coach = [
             (points_engine.compute_record_hash(row, KEY_COLUMNS_PRO_BONO, prefix=HASH_PREFIX_PRO_BONO), row)
             for row in pb_data_for_coach
         ]
-        coach_eligible_pb_seed = points_engine.filter_records_by_date_from(
-            pb_records_for_coach, config.COL_DATE_PRO_BONO, config.COACH_RANKING_START_DATE
-        )
         pro_bono_coach_pts_seed = points_engine.calculate_points_by_coach(
-            coach_eligible_pb_seed, COL_COACH, config.POINTS_PER_PRO_BONO
+            pb_records_for_coach, COL_COACH, config.POINTS_PER_PRO_BONO
         )
-        coach_eligible_pb_hashes = {h for h, _ in coach_eligible_pb_seed}
+        coach_eligible_pb_hashes = {h for h, _ in pb_records_for_coach}
 
         carry_over_por_coach: dict[str, int] = {}
         all_coaches = set(pontos_por_coach.keys()) | set(coach_group_people.keys()) | set(pro_bono_coach_pts_seed.keys())

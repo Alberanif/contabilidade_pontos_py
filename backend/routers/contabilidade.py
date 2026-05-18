@@ -471,11 +471,8 @@ def executar_contabilidade():
         )
         pontos_por_clan = {_normalize_clan(k): v for k, v in raw_points.items()}
 
-        coach_eligible_ci = points_engine.filter_records_by_date_from(
-            new_records, config.COL_DATE_PAYING, config.COACH_RANKING_START_DATE
-        )
         pontos_por_coach = points_engine.calculate_points_by_coach(
-            coach_eligible_ci, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+            new_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
 
         processed_hashes = supabase_client.get_processed_hashes()

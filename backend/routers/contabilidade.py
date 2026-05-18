@@ -900,66 +900,53 @@ def importar_inicial():
 
 @router.get("/debug/date-sample")
 def debug_date_sample():
-    """Diagnóstico: resumo por modalidade/mês e amostra dos registros elegíveis."""
+    """Diagnóstico: resumo por modalidade e amostra dos primeiros registros."""
     rows_pay = google_sheets_client.fetch_records()
     rows_pb  = google_sheets_client.fetch_records_pro_bono()
 
-    ci_total = ci_elegiveis = 0
-    group_total = group_elegiveis_coach = 0
-    ci_abril_sample = []
+    ci_total = 0
+    group_total = 0
+    ci_sample = []
 
     for i, row in enumerate(rows_pay[1:], start=2):
         modalidade = row[COL_MODALIDADE].strip() if COL_MODALIDADE < len(row) else ""
         coach = row[config.COL_COACH].strip() if config.COL_COACH < len(row) else ""
         raw_date = row[config.COL_DATE_PAYING] if config.COL_DATE_PAYING < len(row) else ""
         parsed = points_engine.parse_date(raw_date)
-        elegivel = parsed is None or parsed >= config.COACH_RANKING_START_DATE
-
         if modalidade.upper() == "COACHING INDIVIDUAL":
             ci_total += 1
-            if elegivel:
-                ci_elegiveis += 1
-                if len(ci_abril_sample) < 10:
-                    ci_abril_sample.append({
-                        "linha": i, "coach": coach,
-                        "col_k_raw": raw_date, "data_parsed": str(parsed) if parsed else None,
-                    })
+            if len(ci_sample) < 10:
+                ci_sample.append({
+                    "linha": i, "coach": coach,
+                    "col_k_raw": raw_date, "data_parsed": str(parsed) if parsed else None,
+                })
         elif any(m.upper() in modalidade.upper() for m in ["GRUPO", "EMPRESA"]):
             group_total += 1
-            if elegivel:
-                group_elegiveis_coach += 1
 
-    pb_total = pb_elegiveis = 0
-    pb_abril_sample = []
+    pb_total = 0
+    pb_sample = []
     for i, row in enumerate(rows_pb[1:], start=2):
         coach = row[config.COL_COACH].strip() if config.COL_COACH < len(row) else ""
         raw_date = row[config.COL_DATE_PRO_BONO] if config.COL_DATE_PRO_BONO < len(row) else ""
         parsed = points_engine.parse_date(raw_date)
-        elegivel = parsed is None or parsed >= config.COACH_RANKING_START_DATE
         pb_total += 1
-        if elegivel:
-            pb_elegiveis += 1
-            if len(pb_abril_sample) < 10:
-                pb_abril_sample.append({
-                    "linha": i, "coach": coach,
-                    "col_j_raw": raw_date, "data_parsed": str(parsed) if parsed else None,
-                })
+        if len(pb_sample) < 10:
+            pb_sample.append({
+                "linha": i, "coach": coach,
+                "col_j_raw": raw_date, "data_parsed": str(parsed) if parsed else None,
+            })
 
     return {
         "resumo": {
             "ci_total": ci_total,
-            "ci_elegiveis_abril_em_diante": ci_elegiveis,
             "group_total": group_total,
-            "group_elegiveis_coach_abril_em_diante": group_elegiveis_coach,
             "pro_bono_total": pb_total,
-            "pro_bono_elegiveis_abril_em_diante": pb_elegiveis,
         },
-        "ci_elegiveis_amostra": ci_abril_sample,
-        "pro_bono_elegiveis_amostra": pb_abril_sample,
+        "ci_amostra": ci_sample,
+        "pro_bono_amostra": pb_sample,
         "config": {
             "col_date_paying": config.COL_DATE_PAYING,
             "col_date_pro_bono": config.COL_DATE_PRO_BONO,
-            "coach_ranking_start": str(config.COACH_RANKING_START_DATE),
         },
     }
 

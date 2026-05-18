@@ -621,19 +621,34 @@ def reprocessar_contabilidade():
         # Processar registros Pro-bono (banco zerado, usar set() vazio)
         n_pro_bono, pro_bono_clan_pts, pro_bono_coach_pts = _process_pro_bono_records(set())
 
+        pagante_pts: dict[str, int] = {}
+        for source in (pontos_por_clan, pontos_grupo_por_clan):
+            for clan, pts in source.items():
+                pagante_pts[clan] = pagante_pts.get(clan, 0) + pts
+
         all_points: dict[str, int] = {}
-        for clan, pts in {**pontos_por_clan, **pontos_grupo_por_clan, **pro_bono_clan_pts}.items():
-            all_points[clan] = all_points.get(clan, 0) + pts
+        for source in (pagante_pts, pro_bono_clan_pts):
+            for clan, pts in source.items():
+                all_points[clan] = all_points.get(clan, 0) + pts
 
         all_coach_points: dict[str, int] = {}
-        for coach, pts in {**pontos_por_coach, **pro_bono_coach_pts}.items():
-            all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
+        for source in (pontos_por_coach, pro_bono_coach_pts):
+            for coach, pts in source.items():
+                all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
         for clan, total in all_points.items():
-            supabase_client.upsert_clan_total(clan, total)
+            supabase_client.upsert_clan_total(
+                clan, total,
+                total_pagante=pagante_pts.get(clan, 0),
+                total_pro_bono=pro_bono_clan_pts.get(clan, 0),
+            )
 
         for coach, total in all_coach_points.items():
-            supabase_client.upsert_coach_total(coach, total)
+            supabase_client.upsert_coach_total(
+                coach, total,
+                total_pagante=pontos_por_coach.get(coach, 0),
+                total_pro_bono=pro_bono_coach_pts.get(coach, 0),
+            )
 
         partes = [
             f"{registros_removidos} removidos",
@@ -826,18 +841,34 @@ def importar_inicial():
             coach_eligible_seed, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
 
+        # Pontos Pro-bono elegíveis para coaches (data >= COACH_RANKING_START_DATE)
+        pb_data_for_coach = pb_rows_seed[1:] if pb_rows_seed else []
+        pb_records_for_coach = [
+            (points_engine.compute_record_hash(row, KEY_COLUMNS_PRO_BONO, prefix=HASH_PREFIX_PRO_BONO), row)
+            for row in pb_data_for_coach
+        ]
+        coach_eligible_pb_seed = points_engine.filter_records_by_date_from(
+            pb_records_for_coach, config.COL_DATE_PRO_BONO, config.COACH_RANKING_START_DATE
+        )
+        pro_bono_coach_pts_seed = points_engine.calculate_points_by_coach(
+            coach_eligible_pb_seed, COL_COACH, config.POINTS_PER_PRO_BONO
+        )
+        coach_eligible_pb_hashes = {h for h, _ in coach_eligible_pb_seed}
+
         carry_over_por_coach: dict[str, int] = {}
-        all_coaches = set(pontos_por_coach.keys()) | set(coach_group_people.keys())
+        all_coaches = set(pontos_por_coach.keys()) | set(coach_group_people.keys()) | set(pro_bono_coach_pts_seed.keys())
         for coach in all_coaches:
-            total = pontos_por_coach.get(coach, 0)
+            ci_pts = pontos_por_coach.get(coach, 0)
+            pb_pts = pro_bono_coach_pts_seed.get(coach, 0)
+            total = ci_pts + pb_pts
             pessoas = coach_group_people.get(coach, 0)
             carry_over = pessoas % config.BATCH_SIZE_GROUP if coach in coaches_com_lote else 0
             carry_over_por_coach[coach] = carry_over
             supabase_client.upsert_coach_total(
                 coach, total,
                 pessoas_em_espera=carry_over,
-                total_pagante=total,   # all coach points are pagante
-                total_pro_bono=0,
+                total_pagante=ci_pts,
+                total_pro_bono=pb_pts,
             )
 
         # Fase 8: Importar registros Pro-bono como contabilizado (10 pts cada, sem fila)
@@ -857,7 +888,7 @@ def importar_inicial():
                     extra_fields={
                         "status": "contabilizado",
                         "status_coach": "contabilizado",
-                        "pontos_coach": 0,
+                        "pontos_coach": config.POINTS_PER_PRO_BONO if record_hash in coach_eligible_pb_hashes else 0,
                     },
                     date_col=config.COL_DATE_PRO_BONO,
                 )

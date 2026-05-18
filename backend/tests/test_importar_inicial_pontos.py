@@ -114,16 +114,17 @@ class TestImportarInicialPontos:
         assert records[0]["pontos"] == config.POINTS_PER_COACHING_INDIVIDUAL
         assert records[0]["pontos_coach"] == config.POINTS_PER_COACHING_INDIVIDUAL
 
-    def test_ci_inelegivel_pontos_coach_zero(self):
+    def test_ci_pre_april_pontos_coach_full(self):
         """CI coaching com data < COACH_RANKING_START_DATE (antes de 01/04/2026):
-        pontos = POINTS_PER_COACHING_INDIVIDUAL, pontos_coach = 0."""
+        pontos = POINTS_PER_COACHING_INDIVIDUAL, pontos_coach = POINTS_PER_COACHING_INDIVIDUAL
+        (sem restrição de data — todos os registros contam para o ranking de coach)."""
         records = _run_import(
             ci_rows=[_ci_row("15/03/2026")],
             ranking=[{"clan": "CLÃ 1", "total_pontos": 30}],
         )
         assert len(records) == 1
         assert records[0]["pontos"] == config.POINTS_PER_COACHING_INDIVIDUAL
-        assert records[0]["pontos_coach"] == 0
+        assert records[0]["pontos_coach"] == config.POINTS_PER_COACHING_INDIVIDUAL
 
     def test_grupo_contabilizado_pontos_per_record_in_batch(self):
         """Grupo com pessoas >= BATCH_SIZE_GROUP (clã tem lote completo):

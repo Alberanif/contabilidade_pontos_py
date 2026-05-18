@@ -128,17 +128,13 @@ def _process_group_records(
             num_participantes = max(1, int(raw_participantes))
         except (ValueError, AttributeError):
             num_participantes = 1
-        record_date = points_engine.parse_date(
-            row[config.COL_DATE_PAYING].strip() if config.COL_DATE_PAYING < len(row) else ""
-        )
-        coach_elegivel = record_date is not None and record_date >= config.COACH_RANKING_START_DATE
         _build_and_insert(
             record_hash, row, header, data_rows,
             pontos=0,
             extra_fields={
                 "status": "pendente",
                 "num_participantes": num_participantes,
-                "status_coach": "pendente" if coach_elegivel else "contabilizado",
+                "status_coach": "pendente",
                 "pontos_coach": 0
             },
             date_col=config.COL_DATE_PAYING,

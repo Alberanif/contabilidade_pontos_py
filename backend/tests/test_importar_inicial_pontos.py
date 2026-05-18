@@ -104,7 +104,7 @@ def _run_import(ci_rows=None, group_rows=None, pb_rows=None, ranking=None):
 class TestImportarInicialPontos:
 
     def test_ci_elegivel_pontos_e_pontos_coach_corretos(self):
-        """CI coaching com data >= COACH_RANKING_START_DATE:
+        """CI coaching contabilizado:
         pontos = POINTS_PER_COACHING_INDIVIDUAL, pontos_coach = POINTS_PER_COACHING_INDIVIDUAL."""
         records = _run_import(
             ci_rows=[_ci_row("06/04/2026")],
@@ -115,9 +115,9 @@ class TestImportarInicialPontos:
         assert records[0]["pontos_coach"] == config.POINTS_PER_COACHING_INDIVIDUAL
 
     def test_ci_pre_april_pontos_coach_full(self):
-        """CI coaching com data < COACH_RANKING_START_DATE (antes de 01/04/2026):
+        """CI coaching com data anterior a abril/2026:
         pontos = POINTS_PER_COACHING_INDIVIDUAL, pontos_coach = POINTS_PER_COACHING_INDIVIDUAL
-        (sem restrição de data — todos os registros contam para o ranking de coach)."""
+        (todos os registros, independente da data, contam para o ranking de coach)."""
         records = _run_import(
             ci_rows=[_ci_row("15/03/2026")],
             ranking=[{"clan": "CLÃ 1", "total_pontos": 30}],

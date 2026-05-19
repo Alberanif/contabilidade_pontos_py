@@ -120,64 +120,88 @@ class TestGetPeriodCoachTotalsFloor:
 class TestGetTipoClanTotalsFloor:
 
     def test_pagante_partial_group_returns_zero(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6, "registro_hash": "abc"}]
+        records = [{"clan": "CLÃ 1", "pontos": 6, "modalidade": "Coaching em grupo"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
         assert result.get("CLÃ 1", 0) == 0
 
     def test_pagante_full_batch_returns_30(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6, "registro_hash": "abc"} for _ in range(5)]
+        records = [{"clan": "CLÃ 1", "pontos": 6, "modalidade": "Coaching em grupo"} for _ in range(5)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
         assert result["CLÃ 1"] == 30
 
     def test_pagante_36pts_floors_to_30(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6, "registro_hash": "abc"} for _ in range(6)]
+        records = [{"clan": "CLÃ 1", "pontos": 6, "modalidade": "Coaching em grupo"} for _ in range(6)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
         assert result["CLÃ 1"] == 30
 
     def test_pro_bono_10pts_not_floored(self):
-        records = [{"clan": "CLÃ 1", "pontos": 10, "registro_hash": "pro_bono:xyz"}]
+        records = [{"clan": "CLÃ 1", "pontos": 10, "modalidade": "Pro-bono"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_clan_totals("pro_bono", INICIO, FIM)
         assert result["CLÃ 1"] == 10
 
     def test_pagante_individual_30pts_preserved(self):
-        records = [{"clan": "CLÃ 1", "pontos": 30, "registro_hash": "ind:xyz"}]
+        records = [{"clan": "CLÃ 1", "pontos": 30, "modalidade": "Coaching Individual"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
         assert result["CLÃ 1"] == 30
+
+    def test_pro_bono_excluded_from_pagante(self):
+        records = [{"clan": "CLÃ 1", "pontos": 10, "modalidade": "Pro-bono"}]
+        with patch("supabase_client._get_client", return_value=_mock_client(records)):
+            result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
+        assert result.get("CLÃ 1", 0) == 0
+
+    def test_pagante_excluded_from_pro_bono(self):
+        records = [{"clan": "CLÃ 1", "pontos": 30, "modalidade": "Coaching Individual"}]
+        with patch("supabase_client._get_client", return_value=_mock_client(records)):
+            result = supabase_client.get_tipo_clan_totals("pro_bono", INICIO, FIM)
+        assert result.get("CLÃ 1", 0) == 0
 
 
 class TestGetTipoCoachTotalsFloor:
 
     def test_pagante_partial_group_returns_zero(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6, "registro_hash": "abc"}]
+        records = [{"coach": "Coach A", "pontos_coach": 6, "modalidade": "Coaching em grupo"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
         assert result.get("Coach A", 0) == 0
 
     def test_pagante_full_batch_returns_30(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6, "registro_hash": "abc"} for _ in range(5)]
+        records = [{"coach": "Coach A", "pontos_coach": 6, "modalidade": "Coaching em grupo"} for _ in range(5)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
         assert result["Coach A"] == 30
 
     def test_pagante_36pts_floors_to_30(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6, "registro_hash": "abc"} for _ in range(6)]
+        records = [{"coach": "Coach A", "pontos_coach": 6, "modalidade": "Coaching em grupo"} for _ in range(6)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
         assert result["Coach A"] == 30
 
     def test_pagante_individual_30pts_preserved(self):
-        records = [{"coach": "Coach A", "pontos_coach": 30, "registro_hash": "ind:xyz"}]
+        records = [{"coach": "Coach A", "pontos_coach": 30, "modalidade": "Coaching Individual"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
         assert result["Coach A"] == 30
 
     def test_null_coach_ignored(self):
-        records = [{"coach": None, "pontos_coach": 6, "registro_hash": "abc"}]
+        records = [{"coach": None, "pontos_coach": 6, "modalidade": "Coaching em grupo"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
         assert result == {}
+
+    def test_pro_bono_excluded_from_pagante(self):
+        records = [{"coach": "Coach A", "pontos_coach": 10, "modalidade": "Pro-bono"}]
+        with patch("supabase_client._get_client", return_value=_mock_client(records)):
+            result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
+        assert result.get("Coach A", 0) == 0
+
+    def test_pro_bono_included_in_pro_bono_filter(self):
+        records = [{"coach": "Coach A", "pontos_coach": 10, "modalidade": "Pro-bono"}]
+        with patch("supabase_client._get_client", return_value=_mock_client(records)):
+            result = supabase_client.get_tipo_coach_totals("pro_bono", INICIO, FIM)
+        assert result["Coach A"] == 10

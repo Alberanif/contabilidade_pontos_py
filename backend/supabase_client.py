@@ -679,7 +679,7 @@ def get_tipo_clan_totals(
     # With date filter: sum from TABLE_REGISTROS (period-based, existing behavior)
     query = (
         client.table(TABLE_REGISTROS)
-        .select("clan, pontos, registro_hash")
+        .select("clan, pontos, modalidade")
         .eq("status", "contabilizado")
         .gte("data_registro", inicio.isoformat())
         .lte("data_registro", fim.isoformat())
@@ -690,8 +690,8 @@ def get_tipo_clan_totals(
     group_raw: dict[str, int] = {}
     totals: dict[str, int] = {}
     for rec in records:
-        h = rec.get("registro_hash", "")
-        if is_pro_bono != h.startswith("pro_bono:"):
+        rec_is_pro_bono = rec.get("modalidade", "") == "Pro-bono"
+        if is_pro_bono != rec_is_pro_bono:
             continue
         clan = rec["clan"]
         p = rec["pontos"]
@@ -736,7 +736,7 @@ def get_tipo_coach_totals(
     # With date filter: sum from TABLE_REGISTROS (period-based, existing behavior)
     query = (
         client.table(TABLE_REGISTROS)
-        .select("coach, pontos_coach, registro_hash")
+        .select("coach, pontos_coach, modalidade")
         .eq("status_coach", "contabilizado")
         .gte("data_registro", inicio.isoformat())
         .lte("data_registro", fim.isoformat())
@@ -747,8 +747,8 @@ def get_tipo_coach_totals(
     group_raw: dict[str, int] = {}
     totals: dict[str, int] = {}
     for rec in records:
-        h = rec.get("registro_hash", "")
-        if is_pro_bono != h.startswith("pro_bono:"):
+        rec_is_pro_bono = rec.get("modalidade", "") == "Pro-bono"
+        if is_pro_bono != rec_is_pro_bono:
             continue
         coach = rec.get("coach")
         if not coach:

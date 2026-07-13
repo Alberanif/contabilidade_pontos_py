@@ -41,7 +41,8 @@ class TestGroupRecordAlwaysPendente:
              patch("supabase_client.get_all_pending_clans", return_value=[]), \
              patch("supabase_client.get_pending_group_records_by_clan", return_value=[]), \
              patch("supabase_client.get_all_pending_coaches", return_value=[]), \
-             patch("supabase_client.get_pending_group_records_by_coach", return_value=[]):
+             patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}):
             _process_group_records([row], header, processed_hashes=set())
 
         return inserted
@@ -86,7 +87,8 @@ class TestProBonoAlways10Pts:
              patch("supabase_client.upsert_clan_total", return_value={}), \
              patch("supabase_client.upsert_coach_total", return_value={}), \
              patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]):
+             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}):
             importar_inicial()
 
         return [r for r in inserted if r.get("modalidade") == "Pro-bono"]
@@ -126,7 +128,8 @@ class TestIndividualCoachingAlways30Pts:
              patch("supabase_client.upsert_clan_total", return_value={}), \
              patch("supabase_client.upsert_coach_total", return_value={}), \
              patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]):
+             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}):
             importar_inicial()
 
         return [r for r in inserted if r.get("modalidade") == "Coaching Individual"]

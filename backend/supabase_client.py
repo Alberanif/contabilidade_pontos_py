@@ -9,6 +9,7 @@ TABLE_TOTAIS_COACH = "pontos_ultimate_totais_por_coach"
 TABLE_DESAFIOS = "desafios"
 TABLE_DESAFIO_CAMPOS = "desafio_campos"
 TABLE_DESAFIO_REGISTROS = "desafio_registros"
+TABLE_DESAFIO_IMPORTACAO_LINHAS = "desafio_importacao_linhas"
 
 
 def _get_client() -> Client:
@@ -317,20 +318,60 @@ def get_coach_carry_over(coach: str) -> int:
 # --- Desafios ---
 
 
-def create_desafio(nome: str, contabilizar_pontos: bool, data: date) -> dict:
-    """Cria um novo desafio."""
+def create_desafio(
+    nome: str,
+    contabilizar_pontos: bool,
+    data: date,
+    data_inicio: date | None = None,
+    data_fim: date | None = None,
+    origem: str = "manual",
+    pontos_por_participacao: int | None = None,
+) -> dict:
+    """Cria um novo desafio. `data_inicio`/`data_fim`/`pontos_por_participacao` só
+    são usados por desafios criados via importação de CSV (origem='csv_import')."""
     client = _get_client()
-    result = client.table(TABLE_DESAFIOS).insert(
-        {"nome": nome, "contabilizar_pontos": contabilizar_pontos, "data": str(data)}
-    ).execute()
+    payload = {
+        "nome": nome,
+        "contabilizar_pontos": contabilizar_pontos,
+        "data": str(data),
+        "origem": origem,
+    }
+    if data_inicio is not None:
+        payload["data_inicio"] = str(data_inicio)
+    if data_fim is not None:
+        payload["data_fim"] = str(data_fim)
+    if pontos_por_participacao is not None:
+        payload["pontos_por_participacao"] = pontos_por_participacao
+    result = client.table(TABLE_DESAFIOS).insert(payload).execute()
     return result.data[0]
 
 
-def list_desafios() -> list[dict]:
-    """Lista todos os desafios ordenados por data de criação."""
+def update_desafio_periodo_e_pontos(
+    desafio_id: int, data_inicio: date, data_fim: date, pontos_por_participacao: int
+) -> dict:
+    """Atualiza período e pontos-por-participação de um desafio importado (reimportação)."""
     client = _get_client()
-    result = client.table(TABLE_DESAFIOS).select("*").order("created_at", desc=False).execute()
-    return result.data
+    result = (
+        client.table(TABLE_DESAFIOS)
+        .update({
+            "data_inicio": str(data_inicio),
+            "data_fim": str(data_fim),
+            "data": str(data_fim),
+            "pontos_por_participacao": pontos_por_participacao,
+        })
+        .eq("id", desafio_id)
+        .execute()
+    )
+    return result.data[0]
+
+
+def list_desafios(origem: str | None = None) -> list[dict]:
+    """Lista desafios, opcionalmente filtrando por origem ('manual' | 'csv_import')."""
+    client = _get_client()
+    query = client.table(TABLE_DESAFIOS).select("*").order("created_at", desc=False)
+    if origem is not None:
+        query = query.eq("origem", origem)
+    return query.execute().data
 
 
 def get_desafio(desafio_id: int) -> dict | None:
@@ -466,6 +507,33 @@ def update_desafio_registro_pontos(
         .execute()
     )
     return result.data[0]
+
+
+# --- Desafio Importação Linhas ---
+
+
+def get_tokens_importados(desafio_id: int) -> set[str]:
+    """Retorna o set de tokens já importados para um desafio (usado no dedup entre importações)."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_IMPORTACAO_LINHAS)
+        .select("token_original")
+        .eq("desafio_id", desafio_id)
+        .execute()
+    )
+    return {row["token_original"] for row in result.data}
+
+
+def insert_desafio_importacao_linhas(desafio_id: int, linhas: list[dict]) -> list[dict]:
+    """Insere as linhas de auditoria de uma importação. Cada dict já vem no formato
+    de ImportResult.linhas_auditoria (clan, nome_participante, validado, contabilizado,
+    submitted_at, token_original)."""
+    if not linhas:
+        return []
+    client = _get_client()
+    payload = [{**linha, "desafio_id": desafio_id, "submitted_at": str(linha["submitted_at"])} for linha in linhas]
+    result = client.table(TABLE_DESAFIO_IMPORTACAO_LINHAS).insert(payload).execute()
+    return result.data
 
 
 # --- Helper de delta para clãs ---

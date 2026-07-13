@@ -236,6 +236,9 @@ export interface Desafio {
   nome: string;
   contabilizar_pontos: boolean;
   data: string;
+  data_inicio?: string;
+  data_fim?: string;
+  origem?: string;
   campos: DesafioCampo[];
   total_registros: number;
   created_at: string;
@@ -254,11 +257,17 @@ export function fetchDesafios(): Promise<Desafio[]> {
   return request('/api/desafios');
 }
 
+export interface DesafioRegistroInput {
+  clan: string;
+  pontos: number;
+}
+
 export function createDesafio(data: {
   nome: string;
   contabilizar_pontos: boolean;
-  data: string;
-  campos: { nome: string; tipo: string; ordem: number }[];
+  data_inicio: string;
+  data_fim: string;
+  registros: DesafioRegistroInput[];
 }): Promise<Desafio> {
   return request('/api/desafios', { method: 'POST', body: JSON.stringify(data) });
 }
@@ -268,8 +277,9 @@ export function updateDesafio(
   data: {
     nome: string;
     contabilizar_pontos: boolean;
-    data: string;
-    campos: { id?: number; nome: string; tipo: string; ordem: number }[];
+    data_inicio: string;
+    data_fim: string;
+    registros: DesafioRegistroInput[];
   }
 ): Promise<Desafio> {
   return request(`/api/desafios/${id}`, { method: 'PUT', body: JSON.stringify(data) });

@@ -444,6 +444,90 @@ def aprovar_coach(body: AprovarCoachRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ReprocessarCoachesResponse(BaseModel):
+    registros_atualizados: int
+    coaches_afetados: list[str]
+    totais_recalculados: dict[str, int]
+    avisos: list[str]
+    mensagem: str
+
+
+@router.post("/reprocessar-coaches", response_model=ReprocessarCoachesResponse)
+def reprocessar_coaches():
+    """Reaplica pontos_ultimate_coach_aliases: reescreve o coach dos registros
+    já existentes para o nome canônico e recalcula do zero os totais afetados.
+    Idempotente — sem mudança na tabela de aliases, não altera nada. Chamar
+    sempre que uma linha nova for adicionada/editada em coach_aliases."""
+    try:
+        alias_map = supabase_client.get_coach_alias_map()
+        avisos = coach_identity.detect_alias_chains(alias_map)
+
+        all_regs = supabase_client.list_all_registros()
+        raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
+
+        registros_atualizados = 0
+        coaches_afetados: set[str] = set()
+        for raw_coach in raw_coaches:
+            canonical = coach_identity.resolve_coach(raw_coach, alias_map)
+            if canonical != raw_coach:
+                registros_atualizados += supabase_client.update_registros_coach(raw_coach, canonical)
+                coaches_afetados.add(canonical)
+                supabase_client.delete_coach_total(raw_coach)
+
+        totais_recalculados: dict[str, int] = {}
+        if coaches_afetados:
+            all_regs = supabase_client.list_all_registros()
+
+        group_modalidades_upper = {m.upper() for m in GROUP_MODALIDADES}
+        for canonical in coaches_afetados:
+            regs_canonico = [r for r in all_regs if r.get("coach") == canonical]
+            ci_pts = sum(
+                r.get("pontos_coach") or 0
+                for r in regs_canonico
+                if (r.get("modalidade") or "").strip().upper() == "COACHING INDIVIDUAL"
+                and r.get("status_coach") == "contabilizado"
+            )
+            pb_pts = sum(
+                r.get("pontos_coach") or 0
+                for r in regs_canonico
+                if (r.get("modalidade") or "").strip().upper() == "PRO-BONO"
+            )
+            group_people = sum(
+                r.get("num_participantes") or 1
+                for r in regs_canonico
+                if (r.get("modalidade") or "").strip().upper() in group_modalidades_upper
+                and r.get("status_coach") == "contabilizado"
+            )
+            lotes = group_people // config.BATCH_SIZE_GROUP
+            novo_carry = group_people % config.BATCH_SIZE_GROUP
+            group_pts = lotes * config.POINTS_PER_BATCH_GROUP
+            total_pagante = ci_pts + group_pts
+            total_pontos = total_pagante + pb_pts
+            supabase_client.upsert_coach_total(
+                canonical, total_pontos,
+                pessoas_em_espera=novo_carry,
+                total_pagante=total_pagante,
+                total_pro_bono=pb_pts,
+            )
+            totais_recalculados[canonical] = total_pontos
+
+        for canonical in coaches_afetados:
+            aprovar_coach(AprovarCoachRequest(coach=canonical))
+
+        return ReprocessarCoachesResponse(
+            registros_atualizados=registros_atualizados,
+            coaches_afetados=sorted(coaches_afetados),
+            totais_recalculados=totais_recalculados,
+            avisos=avisos,
+            mensagem=(
+                f"{registros_atualizados} registro(s) atualizados. "
+                f"{len(coaches_afetados)} coach(es) recalculados."
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/executar", response_model=ExecutarResponse)
 def executar_contabilidade():
     try:

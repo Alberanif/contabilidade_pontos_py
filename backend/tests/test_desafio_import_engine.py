@@ -16,7 +16,17 @@ from desafio_import_engine import (
     filtrar_tokens_novos,
     deduplicar_por_pessoa,
     ContabilizacaoRow,
+    processar_importacao,
 )
+
+MAPPING_TESTE = {
+    "clan": "clan", "nome": "nome", "validado": "validado",
+    "submitted_at": "data", "token": "token",
+}
+
+
+def _raw(clan, nome, validado, data, token):
+    return {"clan": clan, "nome": nome, "validado": validado, "data": data, "token": token}
 
 MAPPING = {
     "clan": "Selecionar o Clã em que você está (1 a 8):",
@@ -231,3 +241,51 @@ class TestDeduplicarPorPessoa:
         gustavo = _row_pessoa("CLÃ 1", "Gustavo Imhof", datetime(2026, 5, 31, 5, 2, 47))
         result = deduplicar_por_pessoa([ana, gustavo])
         assert all(r.contabilizado for r in result)
+
+
+class TestProcessarImportacao:
+
+    def test_cenario_completo(self):
+        raw_rows = [
+            _raw("1", "Ana Albertim", "Sim", "25/05/2026 16:03:30", "AAA"),
+            _raw("1", "Luciana Batista", "Sim", "26/06/2026 17:59:07", "BBB1"),
+            _raw("1", "Luciana Batista", "Sim", "30/06/2026 01:14:36", "BBB2"),  # reenvio, mais recente
+            _raw("8", "Paula Petroli Pierozzi", "Sim", "21/06/2026 23:18:42", "CCC"),
+            _raw("9", "Alguem", "Sim", "01/06/2026 00:00:00", "DDD"),            # clã inexistente
+            _raw("1", "Outra Pessoa", "Não", "01/06/2026 00:00:00", "EEE"),      # não validado
+            _raw("1", "Mais Alguem", "Sim", "05/07/2026 00:10:21", "FFF"),       # fora do período
+        ]
+        result = processar_importacao(
+            raw_rows=raw_rows,
+            mapping=MAPPING_TESTE,
+            clans_validos={f"CLÃ {n}" for n in range(1, 9)},
+            tokens_ja_importados=set(),
+            data_inicio=date(2026, 5, 11),
+            data_fim=date(2026, 6, 30),
+            pontos_por_participacao=10,
+        )
+
+        assert result.pontos_por_clan == {"CLÃ 1": 20, "CLÃ 8": 10}
+        assert result.participacoes_por_clan == {"CLÃ 1": 2, "CLÃ 8": 1}
+        assert len(result.avisos) >= 2  # clã 9 inválido + linha fora do período
+
+        auditoria_por_token = {a["token_original"]: a for a in result.linhas_auditoria}
+        assert set(auditoria_por_token) == {"AAA", "BBB1", "BBB2", "CCC", "EEE"}
+        assert auditoria_por_token["BBB1"]["contabilizado"] is False
+        assert auditoria_por_token["BBB2"]["contabilizado"] is True
+        assert auditoria_por_token["EEE"]["validado"] is False
+        assert auditoria_por_token["EEE"]["contabilizado"] is False
+
+    def test_token_ja_importado_e_ignorado_silenciosamente(self):
+        raw_rows = [_raw("1", "Ana Albertim", "Sim", "25/05/2026 16:03:30", "AAA")]
+        result = processar_importacao(
+            raw_rows=raw_rows,
+            mapping=MAPPING_TESTE,
+            clans_validos={"CLÃ 1"},
+            tokens_ja_importados={"AAA"},
+            data_inicio=date(2026, 5, 11),
+            data_fim=date(2026, 6, 30),
+            pontos_por_participacao=10,
+        )
+        assert result.pontos_por_clan == {}
+        assert result.linhas_auditoria == []

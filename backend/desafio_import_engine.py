@@ -110,3 +110,61 @@ def deduplicar_por_pessoa(rows: list[ImportRow]) -> list[ContabilizacaoRow]:
 
     vencedores = set(mais_recente_por_pessoa.values())
     return [ContabilizacaoRow(row=row, contabilizado=row in vencedores) for row in rows]
+
+
+@dataclass
+class ImportResult:
+    pontos_por_clan: dict[str, int] = field(default_factory=dict)
+    participacoes_por_clan: dict[str, int] = field(default_factory=dict)
+    linhas_auditoria: list[dict] = field(default_factory=list)
+    avisos: list[str] = field(default_factory=list)
+
+
+def processar_importacao(
+    raw_rows: list[dict],
+    mapping: dict,
+    clans_validos: set[str],
+    tokens_ja_importados: set[str],
+    data_inicio: date,
+    data_fim: date,
+    pontos_por_participacao: int,
+) -> ImportResult:
+    """Pipeline completo: parse → período → clã válido → token novo → dedup de pessoa → agregação.
+
+    Ordem deliberada: período primeiro (é o filtro mais barato/fundamental — decide
+    se a linha pertence a este desafio), depois clã (senão avisos de clã inválido
+    incluiriam linhas de outros desafios), depois dedup entre importações (token),
+    e por último dedup dentro do lote (pessoa), que só faz sentido sobre o conjunto final.
+    """
+    parsed = [parse_row(r, mapping) for r in raw_rows]
+
+    dentro_periodo, fora_periodo = filtrar_por_periodo(parsed, data_inicio, data_fim)
+    validos, invalidos = filtrar_clans_validos(dentro_periodo, clans_validos)
+    novos, repetidos = filtrar_tokens_novos(validos, tokens_ja_importados)
+    contabilizacao = deduplicar_por_pessoa(novos)
+
+    result = ImportResult()
+
+    for item in contabilizacao:
+        row = item.row
+        result.linhas_auditoria.append({
+            "clan": row.clan,
+            "nome_participante": row.nome,
+            "validado": row.validado,
+            "contabilizado": row.validado and item.contabilizado,
+            "submitted_at": row.submitted_at,
+            "token_original": row.token,
+        })
+        if row.validado and item.contabilizado:
+            result.participacoes_por_clan[row.clan] = result.participacoes_por_clan.get(row.clan, 0) + 1
+            result.pontos_por_clan[row.clan] = result.participacoes_por_clan[row.clan] * pontos_por_participacao
+
+    if invalidos:
+        clans_desconhecidos = sorted({r.clan for r in invalidos})
+        result.avisos.append(
+            f"{len(invalidos)} linha(s) ignorada(s) por clã não reconhecido: {', '.join(clans_desconhecidos)}"
+        )
+    if fora_periodo:
+        result.avisos.append(f"{len(fora_periodo)} linha(s) fora do período informado foram ignoradas")
+
+    return result

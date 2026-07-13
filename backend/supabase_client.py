@@ -381,12 +381,24 @@ def get_desafio(desafio_id: int) -> dict | None:
     return result.data[0] if result.data else None
 
 
-def update_desafio(desafio_id: int, nome: str, contabilizar_pontos: bool, data: date) -> dict:
-    """Atualiza nome, modo de contabilização e data de um desafio."""
+def update_desafio(
+    desafio_id: int,
+    nome: str,
+    contabilizar_pontos: bool,
+    data: date,
+    data_inicio: date | None = None,
+    data_fim: date | None = None,
+) -> dict:
+    """Atualiza nome, modo de contabilização, data e (opcionalmente) período de um desafio."""
     client = _get_client()
+    payload = {"nome": nome, "contabilizar_pontos": contabilizar_pontos, "data": str(data)}
+    if data_inicio is not None:
+        payload["data_inicio"] = str(data_inicio)
+    if data_fim is not None:
+        payload["data_fim"] = str(data_fim)
     result = (
         client.table(TABLE_DESAFIOS)
-        .update({"nome": nome, "contabilizar_pontos": contabilizar_pontos, "data": str(data)})
+        .update(payload)
         .eq("id", desafio_id)
         .execute()
     )

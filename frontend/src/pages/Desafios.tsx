@@ -7,8 +7,6 @@ import {
   updateDesafio,
   deleteDesafio,
   fetchDesafioRegistros,
-  createDesafioRegistro,
-  deleteDesafioRegistro,
   type RankingEntry,
   type Desafio,
   type DesafioRegistro,
@@ -23,13 +21,18 @@ function formatDate(dateStr: string): string {
   return `${day}/${month}/${year}`;
 }
 
+function formatPeriodo(d: Desafio): string {
+  if (d.data_inicio && d.data_fim) {
+    return `${formatDate(d.data_inicio)} - ${formatDate(d.data_fim)}`;
+  }
+  return formatDate(d.data);
+}
+
 type Mode = "list" | "form" | "detail" | "import";
 
-interface CampoForm {
-  id?: number;
-  nome: string;
-  tipo: "texto" | "pontuacao";
-  ordem: number;
+interface RegistroForm {
+  clan: string;
+  pontos: string;
 }
 
 export default function Desafios() {
@@ -43,13 +46,9 @@ export default function Desafios() {
   const [editingDesafio, setEditingDesafio] = useState<Desafio | null>(null);
   const [formNome, setFormNome] = useState("");
   const [formContabilizar, setFormContabilizar] = useState(true);
-  const [formData, setFormData] = useState("");
-  const [formCampos, setFormCampos] = useState<CampoForm[]>([]);
-
-  // Register form state
-  const [showRegisterForm, setShowRegisterForm] = useState(false);
-  const [registerClan, setRegisterClan] = useState("");
-  const [registerValores, setRegisterValores] = useState<Record<string, string>>({});
+  const [formDataInicio, setFormDataInicio] = useState("");
+  const [formDataFim, setFormDataFim] = useState("");
+  const [formRegistros, setFormRegistros] = useState<RegistroForm[]>([]);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -112,59 +111,63 @@ export default function Desafios() {
     setEditingDesafio(null);
     setFormNome("");
     setFormContabilizar(true);
-    setFormData("");
-    setFormCampos([]);
+    setFormDataInicio("");
+    setFormDataFim("");
+    setFormRegistros([]);
     setError("");
     setSuccess("");
     setMode("form");
   };
 
-  const openEditForm = (desafio: Desafio) => {
+  const openEditForm = async (desafio: Desafio) => {
     setEditingDesafio(desafio);
     setFormNome(desafio.nome);
     setFormContabilizar(desafio.contabilizar_pontos);
-    setFormData(desafio.data ?? "");
-    setFormCampos(
-      desafio.campos.map((c) => ({
-        id: c.id,
-        nome: c.nome,
-        tipo: c.tipo,
-        ordem: c.ordem,
-      }))
-    );
+    setFormDataInicio(desafio.data_inicio ?? desafio.data ?? "");
+    setFormDataFim(desafio.data_fim ?? desafio.data ?? "");
     setError("");
     setSuccess("");
+    try {
+      const data = await fetchDesafioRegistros(desafio.id);
+      setFormRegistros(data.map((r) => ({ clan: r.clan, pontos: String(r.total_pontos) })));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao carregar registros do desafio");
+      setFormRegistros([]);
+    }
     setMode("form");
   };
 
   const openDetail = async (desafio: Desafio) => {
     setSelectedDesafio(desafio);
-    setShowRegisterForm(false);
     setError("");
     setSuccess("");
     await loadRegistros(desafio.id);
     setMode("detail");
   };
 
-  const addCampo = () => {
-    setFormCampos([
-      ...formCampos,
-      { nome: "", tipo: "texto", ordem: formCampos.length },
-    ]);
+  const addRegistroRow = () => {
+    setFormRegistros([...formRegistros, { clan: "", pontos: "0" }]);
   };
 
-  const removeCampo = (index: number) => {
-    setFormCampos(formCampos.filter((_, i) => i !== index));
+  const removeRegistroRow = (index: number) => {
+    setFormRegistros(formRegistros.filter((_, i) => i !== index));
   };
 
-  const updateCampoField = (
+  const updateRegistroRow = (
     index: number,
-    field: keyof CampoForm,
-    value: string | number
+    field: keyof RegistroForm,
+    value: string
   ) => {
-    setFormCampos(
-      formCampos.map((c, i) => (i === index ? { ...c, [field]: value } : c))
+    setFormRegistros(
+      formRegistros.map((r, i) => (i === index ? { ...r, [field]: value } : r))
     );
+  };
+
+  const clanOptionsFor = (index: number) => {
+    const chosenElsewhere = new Set(
+      formRegistros.filter((_, i) => i !== index).map((r) => r.clan)
+    );
+    return ranking.filter((r) => !chosenElsewhere.has(r.clan));
   };
 
   const handleSaveDesafio = async () => {
@@ -172,33 +175,46 @@ export default function Desafios() {
       setError("O nome do desafio é obrigatório.");
       return;
     }
-    if (!formData) {
-      setError("A data do desafio é obrigatória.");
+    if (!formDataInicio || !formDataFim) {
+      setError("O período (data início e fim) é obrigatório.");
+      return;
+    }
+    if (formDataFim < formDataInicio) {
+      setError("A data fim deve ser maior ou igual à data início.");
+      return;
+    }
+    if (formRegistros.some((r) => !r.clan || r.pontos.trim() === "")) {
+      setError("Selecione o clã e informe a pontuação em todas as linhas.");
+      return;
+    }
+    const clansInformados = formRegistros.map((r) => r.clan);
+    if (new Set(clansInformados).size !== clansInformados.length) {
+      setError("Um mesmo clã não pode aparecer duas vezes.");
       return;
     }
     try {
       setSubmitting(true);
       setError("");
-      const campos = formCampos.map((c, i) => ({
-        ...(c.id !== undefined ? { id: c.id } : {}),
-        nome: c.nome,
-        tipo: c.tipo,
-        ordem: i,
+      const registros = formRegistros.map((r) => ({
+        clan: r.clan,
+        pontos: Number(r.pontos),
       }));
       if (editingDesafio) {
         await updateDesafio(editingDesafio.id, {
           nome: formNome,
           contabilizar_pontos: formContabilizar,
-          data: formData,
-          campos,
+          data_inicio: formDataInicio,
+          data_fim: formDataFim,
+          registros,
         });
         setSuccess("Desafio atualizado com sucesso.");
       } else {
         await createDesafio({
           nome: formNome,
           contabilizar_pontos: formContabilizar,
-          data: formData,
-          campos,
+          data_inicio: formDataInicio,
+          data_fim: formDataFim,
+          registros,
         });
         setSuccess("Desafio criado com sucesso.");
       }
@@ -223,47 +239,6 @@ export default function Desafios() {
       await loadDesafios();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao excluir desafio");
-    }
-  };
-
-  const handleDeleteRegistro = async (registro: DesafioRegistro) => {
-    if (!confirm(`Remover o registro do clã "${registro.clan}"?`)) return;
-    try {
-      setError("");
-      await deleteDesafioRegistro(selectedDesafio!.id, registro.id);
-      setSuccess(`Registro do clã "${registro.clan}" removido.`);
-      await loadRegistros(selectedDesafio!.id);
-      await loadDesafios();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao excluir registro");
-    }
-  };
-
-  const registeredClans = new Set(registros.map((r) => r.clan));
-  const availableClans = ranking.filter((r) => !registeredClans.has(r.clan));
-
-  const handleRegister = async () => {
-    if (!registerClan) {
-      setError("Selecione um clã.");
-      return;
-    }
-    try {
-      setSubmitting(true);
-      setError("");
-      await createDesafioRegistro(selectedDesafio!.id, {
-        clan: registerClan,
-        valores: registerValores,
-      });
-      setSuccess(`Pontos do clã "${registerClan}" registrados.`);
-      setShowRegisterForm(false);
-      setRegisterClan("");
-      setRegisterValores({});
-      await loadRegistros(selectedDesafio!.id);
-      await loadDesafios();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao registrar pontos");
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -340,8 +315,7 @@ export default function Desafios() {
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
                   <th className="py-3 px-4 font-medium">Nome</th>
-                  <th className="py-3 px-4 font-medium">Data</th>
-                  <th className="py-3 px-4 font-medium text-center">Campos</th>
+                  <th className="py-3 px-4 font-medium">Período</th>
                   <th className="py-3 px-4 font-medium text-center">Clãs registrados</th>
                   <th className="py-3 px-4 font-medium text-center">Pontuação</th>
                   <th className="py-3 px-4 font-medium text-right">Ações</th>
@@ -362,10 +336,7 @@ export default function Desafios() {
                       </button>
                     </td>
                     <td className="py-3 px-4 text-gray-600">
-                      {formatDate(d.data)}
-                    </td>
-                    <td className="py-3 px-4 text-center text-gray-600">
-                      {d.campos.length}
+                      {formatPeriodo(d)}
                     </td>
                     <td className="py-3 px-4 text-center text-gray-600">
                       {d.total_registros}
@@ -382,12 +353,14 @@ export default function Desafios() {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-right space-x-3">
-                      <button
-                        onClick={() => openEditForm(d)}
-                        className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-                      >
-                        Editar
-                      </button>
+                      {d.origem !== "csv_import" && (
+                        <button
+                          onClick={() => openEditForm(d)}
+                          className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                        >
+                          Editar
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDeleteDesafio(d)}
                         className="text-red-600 hover:text-red-800 text-sm font-medium"
@@ -451,17 +424,31 @@ export default function Desafios() {
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Data do desafio
-            </label>
-            <input
-              type="date"
-              value={formData}
-              onChange={(e) => setFormData(e.target.value)}
-              required
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Data início
+              </label>
+              <input
+                type="date"
+                value={formDataInicio}
+                onChange={(e) => setFormDataInicio(e.target.value)}
+                required
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Data fim
+              </label>
+              <input
+                type="date"
+                value={formDataFim}
+                onChange={(e) => setFormDataFim(e.target.value)}
+                required
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
           </div>
 
           <div>
@@ -502,46 +489,51 @@ export default function Desafios() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="block text-sm font-medium text-gray-700">
-                Campos
+                Clãs e pontuação
               </label>
               <button
                 type="button"
-                onClick={addCampo}
+                onClick={addRegistroRow}
                 className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
               >
-                + Adicionar campo
+                + Adicionar clã
               </button>
             </div>
-            {formCampos.length === 0 ? (
+            {formRegistros.length === 0 ? (
               <p className="text-sm text-gray-400 italic">
-                Nenhum campo adicionado.
+                Nenhum clã adicionado.
               </p>
             ) : (
               <div className="space-y-2">
-                {formCampos.map((campo, i) => (
+                {formRegistros.map((registro, i) => (
                   <div key={i} className="flex gap-2 items-center">
-                    <input
-                      type="text"
-                      value={campo.nome}
+                    <select
+                      value={registro.clan}
                       onChange={(e) =>
-                        updateCampoField(i, "nome", e.target.value)
+                        updateRegistroRow(i, "clan", e.target.value)
                       }
                       className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      placeholder="Nome do campo"
-                    />
-                    <select
-                      value={campo.tipo}
-                      onChange={(e) =>
-                        updateCampoField(i, "tipo", e.target.value)
-                      }
-                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
-                      <option value="texto">Texto</option>
-                      <option value="pontuacao">Pontuação</option>
+                      <option value="">Selecione um clã</option>
+                      {clanOptionsFor(i).map((r) => (
+                        <option key={r.clan} value={r.clan}>
+                          {r.clan}
+                        </option>
+                      ))}
                     </select>
+                    <input
+                      type="number"
+                      min={0}
+                      value={registro.pontos}
+                      onChange={(e) =>
+                        updateRegistroRow(i, "pontos", e.target.value)
+                      }
+                      className="w-32 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="0"
+                    />
                     <button
                       type="button"
-                      onClick={() => removeCampo(i)}
+                      onClick={() => removeRegistroRow(i)}
                       className="text-red-500 hover:text-red-700 px-2 text-sm"
                     >
                       ✕
@@ -572,7 +564,7 @@ export default function Desafios() {
     );
   }
 
-  // --- Detail mode ---
+  // --- Detail mode (somente leitura) ---
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -602,23 +594,20 @@ export default function Desafios() {
                 : "Não Registrar Pontos"}
             </span>
           )}
-          {selectedDesafio?.data && (
+          {selectedDesafio && (
             <span className="text-sm text-gray-500">
-              {formatDate(selectedDesafio.data)}
+              {formatPeriodo(selectedDesafio)}
             </span>
           )}
         </div>
         <div className="flex gap-3">
           {sheetBtn}
-          {availableClans.length > 0 && !showRegisterForm && (
+          {selectedDesafio && selectedDesafio.origem !== "csv_import" && (
             <button
-              onClick={() => {
-                setShowRegisterForm(true);
-                setError("");
-              }}
+              onClick={() => openEditForm(selectedDesafio)}
               className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
             >
-              Registrar Pontos
+              Editar
             </button>
           )}
         </div>
@@ -627,120 +616,6 @@ export default function Desafios() {
       {alertError}
       {alertSuccess}
       {alertSheet}
-
-      {selectedDesafio && selectedDesafio.campos.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-600 mb-2">
-            Campos do desafio
-          </h3>
-          <div className="flex flex-wrap gap-2">
-            {selectedDesafio.campos.map((c) => (
-              <span
-                key={c.id}
-                className="px-3 py-1 rounded-full border text-xs font-medium bg-gray-50 text-gray-700"
-              >
-                {c.nome}
-                <span
-                  className={`ml-1.5 ${
-                    c.tipo === "pontuacao"
-                      ? "text-indigo-500"
-                      : "text-gray-400"
-                  }`}
-                >
-                  ({c.tipo === "pontuacao" ? "pontuação" : "texto"})
-                </span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {showRegisterForm && selectedDesafio && (
-        <div className="bg-white rounded-xl border border-indigo-200 p-5 space-y-4">
-          <h3 className="text-sm font-semibold text-gray-700">
-            Registrar pontos para um clã
-          </h3>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Clã
-            </label>
-            <select
-              value={registerClan}
-              onChange={(e) => setRegisterClan(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">Selecione um clã</option>
-              {availableClans.map((r) => (
-                <option key={r.clan} value={r.clan}>
-                  {r.clan}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {selectedDesafio.campos.map((campo) => (
-            <div key={campo.id}>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {campo.nome}
-                {campo.tipo === "pontuacao" && (
-                  <span className="ml-1 text-xs text-indigo-500">
-                    (pontuação)
-                  </span>
-                )}
-              </label>
-              {campo.tipo === "pontuacao" ? (
-                <input
-                  type="number"
-                  min={0}
-                  value={registerValores[String(campo.id)] ?? ""}
-                  onChange={(e) =>
-                    setRegisterValores({
-                      ...registerValores,
-                      [String(campo.id)]: e.target.value,
-                    })
-                  }
-                  className="w-40 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  placeholder="0"
-                />
-              ) : (
-                <input
-                  type="text"
-                  value={registerValores[String(campo.id)] ?? ""}
-                  onChange={(e) =>
-                    setRegisterValores({
-                      ...registerValores,
-                      [String(campo.id)]: e.target.value,
-                    })
-                  }
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              )}
-            </div>
-          ))}
-
-          <div className="flex gap-3">
-            <button
-              onClick={handleRegister}
-              disabled={submitting}
-              className="bg-indigo-600 text-white px-5 py-2 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {submitting ? "Salvando..." : "Salvar"}
-            </button>
-            <button
-              onClick={() => {
-                setShowRegisterForm(false);
-                setRegisterClan("");
-                setRegisterValores({});
-                setError("");
-              }}
-              className="bg-white text-gray-600 border border-gray-300 px-5 py-2 rounded-lg font-medium hover:bg-gray-50 transition-colors"
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
-      )}
 
       <div>
         <h3 className="text-sm font-semibold text-gray-700 mb-2">
@@ -756,15 +631,7 @@ export default function Desafios() {
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
                   <th className="py-3 px-4 font-medium">Clã</th>
-                  {selectedDesafio?.campos.map((c) => (
-                    <th key={c.id} className="py-3 px-4 font-medium">
-                      {c.nome}
-                    </th>
-                  ))}
-                  <th className="py-3 px-4 font-medium text-right">
-                    Total pontos
-                  </th>
-                  <th className="py-3 px-4 font-medium text-right">Ação</th>
+                  <th className="py-3 px-4 font-medium text-right">Pontos</th>
                 </tr>
               </thead>
               <tbody>
@@ -776,21 +643,8 @@ export default function Desafios() {
                     <td className="py-3 px-4 font-medium text-gray-700">
                       {reg.clan}
                     </td>
-                    {selectedDesafio?.campos.map((c) => (
-                      <td key={c.id} className="py-3 px-4 text-gray-600">
-                        {String(reg.valores[String(c.id)] ?? "-")}
-                      </td>
-                    ))}
                     <td className="py-3 px-4 text-right font-bold text-indigo-600">
                       {reg.total_pontos.toLocaleString("pt-BR")}
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        onClick={() => handleDeleteRegistro(reg)}
-                        className="text-red-600 hover:text-red-800 text-sm font-medium"
-                      >
-                        Remover
-                      </button>
                     </td>
                   </tr>
                 ))}

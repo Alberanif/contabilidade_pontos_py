@@ -745,9 +745,7 @@ def importar_inicial():
         coach_group_people: dict[str, int] = {}
         for _, row in group_records:
             clan = _normalize_clan(row[COL_CLAN]) if COL_CLAN < len(row) else "DESCONHECIDO"
-            coach = row[COL_COACH].strip() if COL_COACH < len(row) else ""
-            if not coach:
-                coach = "DESCONHECIDO"
+            coach = _normalize_coach(row[COL_COACH]) if COL_COACH < len(row) else "DESCONHECIDO"
             raw_part = row[COL_PARTICIPANTES].strip() if COL_PARTICIPANTES < len(row) else ""
             try:
                 n = max(1, int(raw_part))
@@ -767,9 +765,7 @@ def importar_inicial():
 
         for record_hash, row in group_records:
             clan = _normalize_clan(row[COL_CLAN]) if COL_CLAN < len(row) else "DESCONHECIDO"
-            coach = row[COL_COACH].strip() if COL_COACH < len(row) else ""
-            if not coach:
-                coach = "DESCONHECIDO"
+            coach = _normalize_coach(row[COL_COACH]) if COL_COACH < len(row) else "DESCONHECIDO"
             raw_part = row[COL_PARTICIPANTES].strip() if COL_PARTICIPANTES < len(row) else ""
             try:
                 num_participantes = max(1, int(raw_part))
@@ -832,9 +828,11 @@ def importar_inicial():
             )
 
         # Fase 7: Totais e carry-over por coach.
-        pontos_por_coach = points_engine.calculate_points_by_coach(
+        coach_alias_map = supabase_client.get_coach_alias_map()
+        raw_pontos_por_coach = points_engine.calculate_points_by_coach(
             coaching_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
+        pontos_por_coach = coach_identity.aggregate_by_canonical(raw_pontos_por_coach, coach_alias_map)
 
         # Pontos Pro-bono para coaches (todas as datas, sem restrição)
         pb_data_for_coach = pb_rows_seed[1:] if pb_rows_seed else []
@@ -842,8 +840,11 @@ def importar_inicial():
             (points_engine.compute_record_hash(row, KEY_COLUMNS_PRO_BONO, prefix=HASH_PREFIX_PRO_BONO), row)
             for row in pb_data_for_coach
         ]
-        pro_bono_coach_pts_seed = points_engine.calculate_points_by_coach(
+        raw_pro_bono_coach_pts_seed = points_engine.calculate_points_by_coach(
             pb_records_for_coach, COL_COACH, config.POINTS_PER_PRO_BONO
+        )
+        pro_bono_coach_pts_seed = coach_identity.aggregate_by_canonical(
+            raw_pro_bono_coach_pts_seed, coach_alias_map
         )
 
         carry_over_por_coach: dict[str, int] = {}

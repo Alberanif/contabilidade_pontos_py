@@ -6,6 +6,7 @@ import config
 import google_sheets_client
 import supabase_client
 import points_engine
+import coach_identity
 
 router = APIRouter()
 
@@ -29,6 +30,11 @@ def _normalize_clan(clan_raw: str) -> str:
         return clan_raw.strip()
 
 
+def _normalize_coach(coach_raw: str) -> str:
+    """Resolve o nome canônico de um coach via pontos_ultimate_coach_aliases."""
+    return coach_identity.resolve_coach(coach_raw, supabase_client.get_coach_alias_map())
+
+
 def _build_and_insert(record_hash, row, header, data_rows, pontos, extra_fields=None, date_col=None):
     row_number = data_rows.index(row) + 2 if row in data_rows else 0
     record_data = points_engine.build_record_data(
@@ -45,6 +51,7 @@ def _build_and_insert(record_hash, row, header, data_rows, pontos, extra_fields=
         date_col=date_col,
     )
     record_data["clan"] = _normalize_clan(record_data["clan"])
+    record_data["coach"] = _normalize_coach(record_data["coach"])
     if extra_fields:
         record_data.update(extra_fields)
     supabase_client.insert_processed_record(record_data)
@@ -67,6 +74,7 @@ def _build_and_insert_pro_bono(record_hash, row, header, data_rows, pontos, extr
     )
     record_data["modalidade"] = "Pro-bono"
     record_data["clan"] = _normalize_clan(record_data["clan"])
+    record_data["coach"] = _normalize_coach(record_data["coach"])
     if extra_fields:
         record_data.update(extra_fields)
     supabase_client.insert_processed_record(record_data)

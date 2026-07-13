@@ -80,3 +80,12 @@ def filtrar_clans_validos(
     ok = [r for r in rows if r.clan in clans_validos]
     invalidos = [r for r in rows if r.clan not in clans_validos]
     return ok, invalidos
+
+
+def filtrar_tokens_novos(
+    rows: list[ImportRow], tokens_ja_importados: set[str]
+) -> tuple[list[ImportRow], list[ImportRow]]:
+    """Separa linhas com token inédito das que já foram importadas em execução anterior."""
+    novos = [r for r in rows if r.token not in tokens_ja_importados]
+    repetidos = [r for r in rows if r.token in tokens_ja_importados]
+    return novos, repetidos

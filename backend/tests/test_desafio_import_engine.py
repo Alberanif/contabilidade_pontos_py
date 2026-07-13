@@ -13,6 +13,7 @@ from desafio_import_engine import (
     ImportRow,
     filtrar_por_periodo,
     filtrar_clans_validos,
+    filtrar_tokens_novos,
 )
 
 MAPPING = {
@@ -35,6 +36,13 @@ def _row_com_clan(clan):
     return ImportRow(
         clan=clan, nome="X", nome_normalizado="x",
         validado=True, submitted_at=datetime(2026, 5, 20, 10, 0, 0), token="t1",
+    )
+
+
+def _row_com_token(token):
+    return ImportRow(
+        clan="CLÃ 1", nome="X", nome_normalizado="x",
+        validado=True, submitted_at=datetime(2026, 5, 20, 10, 0, 0), token=token,
     )
 
 
@@ -171,3 +179,17 @@ class TestFiltrarClansValidos:
         row = _row_com_clan("CLÃ 9")
         ok, invalidos = filtrar_clans_validos([row], CLANS_1_A_8)
         assert ok == [] and invalidos == [row]
+
+
+class TestFiltrarTokensNovos:
+
+    def test_token_novo_mantido(self):
+        row = _row_com_token("abc")
+        novos, repetidos = filtrar_tokens_novos([row], {"outro_token"})
+        assert novos == [row] and repetidos == []
+
+    def test_token_ja_importado_e_pulado(self):
+        # Reimportação incremental: mesma linha não deve ser reprocessada
+        row = _row_com_token("ja_visto")
+        novos, repetidos = filtrar_tokens_novos([row], {"ja_visto"})
+        assert novos == [] and repetidos == [row]

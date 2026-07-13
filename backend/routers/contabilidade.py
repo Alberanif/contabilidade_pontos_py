@@ -371,7 +371,7 @@ def aprovar_clan(body: AprovarClanRequest):
 @router.post("/aprovar-coach", response_model=AprovarCoachResponse)
 def aprovar_coach(body: AprovarCoachRequest):
     try:
-        coach = body.coach.strip()
+        coach = _normalize_coach(body.coach)
         pending = supabase_client.get_pending_group_records_by_coach(coach, GROUP_MODALIDADES)
         carry_over = supabase_client.get_coach_carry_over(coach)
 

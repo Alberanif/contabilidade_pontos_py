@@ -79,3 +79,23 @@ class TestBuildAndInsertProBonoNormalizesCoach:
             )
 
         assert inserted[0]["coach"] == "Tatiane Pellicel"
+
+
+from routers.contabilidade import aprovar_coach, AprovarCoachRequest
+
+
+class TestAprovarCoachResolveAlias:
+
+    def test_aprovar_com_alias_busca_fila_do_canonico(self):
+        with patch("supabase_client.get_coach_alias_map",
+                    return_value={"Vini Marini": "Vinicius Marini"}), \
+             patch("supabase_client.get_pending_group_records_by_coach",
+                   return_value=[]) as mock_pending, \
+             patch("supabase_client.get_coach_carry_over", return_value=0), \
+             patch("supabase_client.list_coach_totals", return_value=[]), \
+             patch("supabase_client.upsert_coach_total", return_value={}):
+            aprovar_coach(AprovarCoachRequest(coach="Vini Marini"))
+
+        mock_pending.assert_called_once()
+        args, _ = mock_pending.call_args
+        assert args[0] == "Vinicius Marini"

@@ -71,3 +71,12 @@ def filtrar_por_periodo(
         else:
             fora.append(row)
     return dentro, fora
+
+
+def filtrar_clans_validos(
+    rows: list[ImportRow], clans_validos: set[str]
+) -> tuple[list[ImportRow], list[ImportRow]]:
+    """Separa linhas com clã reconhecido (presente no ranking atual) das demais."""
+    ok = [r for r in rows if r.clan in clans_validos]
+    invalidos = [r for r in rows if r.clan not in clans_validos]
+    return ok, invalidos

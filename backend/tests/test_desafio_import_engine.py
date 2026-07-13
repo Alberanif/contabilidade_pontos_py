@@ -12,6 +12,7 @@ from desafio_import_engine import (
     parse_row,
     ImportRow,
     filtrar_por_periodo,
+    filtrar_clans_validos,
 )
 
 MAPPING = {
@@ -27,6 +28,13 @@ def _row(submitted_at):
     return ImportRow(
         clan="CLÃ 1", nome="X", nome_normalizado="x",
         validado=True, submitted_at=submitted_at, token="t1",
+    )
+
+
+def _row_com_clan(clan):
+    return ImportRow(
+        clan=clan, nome="X", nome_normalizado="x",
+        validado=True, submitted_at=datetime(2026, 5, 20, 10, 0, 0), token="t1",
     )
 
 
@@ -147,3 +155,19 @@ class TestFiltrarPorPeriodo:
         row = _row(None)
         dentro, fora = filtrar_por_periodo([row], date(2026, 5, 11), date(2026, 6, 30))
         assert dentro == [] and fora == [row]
+
+
+CLANS_1_A_8 = {f"CLÃ {n}" for n in range(1, 9)}
+
+
+class TestFiltrarClansValidos:
+
+    def test_clan_valido_mantido(self):
+        row = _row_com_clan("CLÃ 1")
+        ok, invalidos = filtrar_clans_validos([row], CLANS_1_A_8)
+        assert ok == [row] and invalidos == []
+
+    def test_clan_fora_do_ranking_e_invalido(self):
+        row = _row_com_clan("CLÃ 9")
+        ok, invalidos = filtrar_clans_validos([row], CLANS_1_A_8)
+        assert ok == [] and invalidos == [row]

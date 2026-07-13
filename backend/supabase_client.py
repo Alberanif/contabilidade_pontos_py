@@ -10,6 +10,7 @@ TABLE_DESAFIOS = "desafios"
 TABLE_DESAFIO_CAMPOS = "desafio_campos"
 TABLE_DESAFIO_REGISTROS = "desafio_registros"
 TABLE_DESAFIO_IMPORTACAO_LINHAS = "desafio_importacao_linhas"
+TABLE_COACH_ALIASES = "pontos_ultimate_coach_aliases"
 
 
 def _get_client() -> Client:
@@ -98,6 +99,42 @@ def delete_all_registros() -> int:
     """Exclui todos os registros. Retorna a quantidade excluída."""
     client = _get_client()
     result = client.table(TABLE_REGISTROS).delete().neq("id", 0).execute()
+    return len(result.data)
+
+
+def list_all_registros() -> list[dict]:
+    """Retorna todos os registros contabilizados, sem paginação (usa range
+    internamente para superar o limite padrão do PostgREST)."""
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table(TABLE_REGISTROS)
+            .select("*")
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        if not result.data:
+            break
+        all_rows.extend(result.data)
+        if len(result.data) < page_size:
+            break
+        offset += page_size
+    return all_rows
+
+
+def update_registros_coach(old_coach: str, new_coach: str) -> int:
+    """Reescreve o campo coach de old_coach para new_coach em todos os
+    registros que casam. Retorna a quantidade de linhas atualizadas."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .update({"coach": new_coach})
+        .eq("coach", old_coach)
+        .execute()
+    )
     return len(result.data)
 
 
@@ -313,6 +350,30 @@ def get_coach_carry_over(coach: str) -> int:
         .execute()
     )
     return result.data[0]["pessoas_em_espera"] or 0 if result.data else 0
+
+
+def delete_coach_total(coach: str) -> None:
+    """Remove a linha de totais de um coach (usado ao fundir aliases)."""
+    client = _get_client()
+    client.table(TABLE_TOTAIS_COACH).delete().eq("coach", coach).execute()
+
+
+def get_coach_alias_map() -> dict[str, str]:
+    """Retorna {alias: coach_canonico} de todos os aliases cadastrados."""
+    client = _get_client()
+    result = client.table(TABLE_COACH_ALIASES).select("alias, coach_canonico").execute()
+    return {row["alias"]: row["coach_canonico"] for row in result.data}
+
+
+def insert_coach_alias(alias: str, coach_canonico: str) -> dict:
+    """Cadastra (ou atualiza) um alias de coach."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_COACH_ALIASES)
+        .upsert({"alias": alias, "coach_canonico": coach_canonico}, on_conflict="alias")
+        .execute()
+    )
+    return result.data[0] if result.data else {}
 
 
 # --- Desafios ---

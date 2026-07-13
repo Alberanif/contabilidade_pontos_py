@@ -30,3 +30,26 @@ def parse_submitted_at(raw: str) -> datetime | None:
         return datetime.strptime(raw.strip(), "%d/%m/%Y %H:%M:%S")
     except ValueError:
         return None
+
+
+@dataclass(frozen=True)
+class ImportRow:
+    clan: str
+    nome: str
+    nome_normalizado: str
+    validado: bool
+    submitted_at: datetime | None
+    token: str
+
+
+def parse_row(raw_row: dict, mapping: dict) -> ImportRow:
+    """Extrai e normaliza uma linha do CSV usando o mapeamento de colunas escolhido no wizard."""
+    nome = raw_row.get(mapping["nome"], "").strip()
+    return ImportRow(
+        clan=normalizar_clan(raw_row.get(mapping["clan"], "")),
+        nome=nome,
+        nome_normalizado=normalizar_nome(nome),
+        validado=normalizar_validado(raw_row.get(mapping["validado"], "")),
+        submitted_at=parse_submitted_at(raw_row.get(mapping["submitted_at"], "")),
+        token=raw_row.get(mapping["token"], "").strip(),
+    )

@@ -9,7 +9,17 @@ from desafio_import_engine import (
     normalizar_nome,
     normalizar_clan,
     parse_submitted_at,
+    parse_row,
+    ImportRow,
 )
+
+MAPPING = {
+    "clan": "Selecionar o Clã em que você está (1 a 8):",
+    "nome": "Coloque aqui o seu Nome:",
+    "validado": "Você cumpriu o Desafio Pontual G?",
+    "submitted_at": "Submitted At",
+    "token": "Token",
+}
 
 
 class TestNormalizarValidado:
@@ -73,3 +83,29 @@ class TestParseSubmittedAt:
 
     def test_vazio_retorna_none(self):
         assert parse_submitted_at("") is None
+
+
+class TestParseRow:
+
+    def test_linha_real_do_csv(self):
+        raw_row = {
+            "Selecionar o Clã em que você está (1 a 8):": "2",
+            "Coloque aqui o seu Nome:": "Vinicius Alves",
+            "Você cumpriu o Desafio Pontual G?": "Sim",
+            "Submitted At": "11/05/2026 14:34:00",
+            "Token": "gqf0oqvq3c1s7e76nj1gqf0oqk9mpyn0",
+        }
+        row = parse_row(raw_row, MAPPING)
+        assert row == ImportRow(
+            clan="CLÃ 2",
+            nome="Vinicius Alves",
+            nome_normalizado="vinicius alves",
+            validado=True,
+            submitted_at=datetime(2026, 5, 11, 14, 34, 0),
+            token="gqf0oqvq3c1s7e76nj1gqf0oqk9mpyn0",
+        )
+
+    def test_linha_com_data_ilegivel(self):
+        raw_row = {**{k: "" for k in MAPPING.values()}, MAPPING["submitted_at"]: "lixo"}
+        row = parse_row(raw_row, MAPPING)
+        assert row.submitted_at is None

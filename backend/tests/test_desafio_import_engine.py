@@ -3,7 +3,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from desafio_import_engine import normalizar_validado, normalizar_nome
+from desafio_import_engine import normalizar_validado, normalizar_nome, normalizar_clan
 
 
 class TestNormalizarValidado:
@@ -38,3 +38,16 @@ class TestNormalizarNome:
 
     def test_espacos_internos_multiplos_preservados(self):
         assert normalizar_nome("Ana  Paula") == "ana  paula"
+
+
+class TestNormalizarClan:
+
+    def test_numero_simples(self):
+        assert normalizar_clan("2") == "CLÃ 2"
+
+    def test_numero_com_espacos(self):
+        assert normalizar_clan(" 8 ") == "CLÃ 8"
+
+    def test_nao_numerico_mantido_como_esta(self):
+        # Mesmo fallback de _normalize_clan em routers/contabilidade.py
+        assert normalizar_clan("abc") == "abc"

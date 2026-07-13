@@ -53,3 +53,21 @@ def parse_row(raw_row: dict, mapping: dict) -> ImportRow:
         submitted_at=parse_submitted_at(raw_row.get(mapping["submitted_at"], "")),
         token=raw_row.get(mapping["token"], "").strip(),
     )
+
+
+def filtrar_por_periodo(
+    rows: list[ImportRow], data_inicio: date, data_fim: date
+) -> tuple[list[ImportRow], list[ImportRow]]:
+    """Separa linhas dentro de [data_inicio, data_fim] (inclusive) das demais.
+
+    Fail-closed: linha sem data parseável é tratada como fora do período
+    (diferente do fail-open de points_engine.filter_by_date_range — aqui o
+    risco de inflar pontos por engano pesa mais que perder uma linha ambígua).
+    """
+    dentro, fora = [], []
+    for row in rows:
+        if row.submitted_at is not None and data_inicio <= row.submitted_at.date() <= data_fim:
+            dentro.append(row)
+        else:
+            fora.append(row)
+    return dentro, fora

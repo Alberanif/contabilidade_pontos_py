@@ -1,6 +1,6 @@
 import sys
 import os
-from datetime import datetime
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -11,6 +11,7 @@ from desafio_import_engine import (
     parse_submitted_at,
     parse_row,
     ImportRow,
+    filtrar_por_periodo,
 )
 
 MAPPING = {
@@ -20,6 +21,13 @@ MAPPING = {
     "submitted_at": "Submitted At",
     "token": "Token",
 }
+
+
+def _row(submitted_at):
+    return ImportRow(
+        clan="CLÃ 1", nome="X", nome_normalizado="x",
+        validado=True, submitted_at=submitted_at, token="t1",
+    )
 
 
 class TestNormalizarValidado:
@@ -109,3 +117,33 @@ class TestParseRow:
         raw_row = {**{k: "" for k in MAPPING.values()}, MAPPING["submitted_at"]: "lixo"}
         row = parse_row(raw_row, MAPPING)
         assert row.submitted_at is None
+
+
+class TestFiltrarPorPeriodo:
+
+    def test_dentro_do_periodo(self):
+        row = _row(datetime(2026, 5, 20, 10, 0, 0))
+        dentro, fora = filtrar_por_periodo([row], date(2026, 5, 11), date(2026, 6, 30))
+        assert dentro == [row] and fora == []
+
+    def test_limites_inclusivos(self):
+        inicio = _row(datetime(2026, 5, 11, 0, 0, 0))
+        fim = _row(datetime(2026, 6, 30, 23, 59, 59))
+        dentro, fora = filtrar_por_periodo([inicio, fim], date(2026, 5, 11), date(2026, 6, 30))
+        assert dentro == [inicio, fim]
+
+    def test_antes_do_periodo_excluido(self):
+        row = _row(datetime(2026, 5, 1, 10, 0, 0))
+        dentro, fora = filtrar_por_periodo([row], date(2026, 5, 11), date(2026, 6, 30))
+        assert dentro == [] and fora == [row]
+
+    def test_depois_do_periodo_excluido(self):
+        # Caso real: submissão de "Desafio H" em julho não deve contar pro "Desafio G"
+        row = _row(datetime(2026, 7, 5, 0, 10, 21))
+        dentro, fora = filtrar_por_periodo([row], date(2026, 5, 11), date(2026, 6, 30))
+        assert dentro == [] and fora == [row]
+
+    def test_data_ausente_e_fail_closed(self):
+        row = _row(None)
+        dentro, fora = filtrar_por_periodo([row], date(2026, 5, 11), date(2026, 6, 30))
+        assert dentro == [] and fora == [row]

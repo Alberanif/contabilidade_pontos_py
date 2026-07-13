@@ -114,8 +114,11 @@ def _process_pro_bono_records(
         new_records, COL_CLAN, config.POINTS_PER_PRO_BONO
     )
     pontos_por_clan = {_normalize_clan(k): v for k, v in raw_clan_pts.items()}
-    pontos_por_coach = points_engine.calculate_points_by_coach(
+    raw_coach_pts = points_engine.calculate_points_by_coach(
         new_records, COL_COACH, config.POINTS_PER_PRO_BONO
+    )
+    pontos_por_coach = coach_identity.aggregate_by_canonical(
+        raw_coach_pts, supabase_client.get_coach_alias_map()
     )
     return len(new_records), pontos_por_clan, pontos_por_coach
 
@@ -479,8 +482,11 @@ def executar_contabilidade():
         )
         pontos_por_clan = {_normalize_clan(k): v for k, v in raw_points.items()}
 
-        pontos_por_coach = points_engine.calculate_points_by_coach(
+        raw_coach_pts = points_engine.calculate_points_by_coach(
             new_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+        )
+        pontos_por_coach = coach_identity.aggregate_by_canonical(
+            raw_coach_pts, supabase_client.get_coach_alias_map()
         )
 
         processed_hashes = supabase_client.get_processed_hashes()
@@ -605,8 +611,11 @@ def reprocessar_contabilidade():
         )
         pontos_por_clan = {_normalize_clan(k): v for k, v in raw_points.items()}
 
-        pontos_por_coach = points_engine.calculate_points_by_coach(
+        raw_coach_pts = points_engine.calculate_points_by_coach(
             new_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+        )
+        pontos_por_coach = coach_identity.aggregate_by_canonical(
+            raw_coach_pts, supabase_client.get_coach_alias_map()
         )
 
         novos_pendentes, pontos_grupo_por_clan, pendentes_por_clan, pendentes_por_coach = _process_group_records(

@@ -99,3 +99,23 @@ class TestAprovarCoachResolveAlias:
         mock_pending.assert_called_once()
         args, _ = mock_pending.call_args
         assert args[0] == "Vinicius Marini"
+
+
+from routers.contabilidade import _process_pro_bono_records
+
+
+class TestProcessProBonoMergesCoach:
+
+    def test_dois_alias_do_mesmo_coach_somam(self):
+        # COL_CLAN=0, COL_COACH=1, COL_DATE_PRO_BONO=9, COL_PRO_BONO_KEY=10
+        row_a = ["1", "Vini Marini", "", "", "", "", "", "", "", "01/03/2026", "keyA"]
+        row_b = ["1", "Vinicius Marini", "", "", "", "", "", "", "", "01/03/2026", "keyB"]
+
+        with patch("google_sheets_client.fetch_records_pro_bono",
+                   return_value=[[f"col_{i}" for i in range(11)], row_a, row_b]), \
+             patch("supabase_client.get_coach_alias_map",
+                   return_value={"Vini Marini": "Vinicius Marini"}), \
+             patch("supabase_client.insert_processed_record", side_effect=lambda r: r):
+            _n_novos, _pontos_por_clan, pontos_por_coach = _process_pro_bono_records(set())
+
+        assert pontos_por_coach == {"Vinicius Marini": 20}

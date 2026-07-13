@@ -301,3 +301,68 @@ export function deleteDesafioRegistro(
     method: 'DELETE',
   });
 }
+
+// --- Importação de Desafios via CSV ---
+
+export interface ImportPreviewResult {
+  pontos_por_clan: Record<string, number>;
+  participacoes_por_clan: Record<string, number>;
+  avisos: string[];
+  total_linhas_contabilizadas: number;
+}
+
+export interface ImportConfig {
+  nome: string;
+  desafio_id?: number;
+  data_inicio: string;
+  data_fim: string;
+  pontos_por_participacao: number;
+}
+
+export type ColumnMapping = {
+  clan: string;
+  nome: string;
+  validado: string;
+  submitted_at: string;
+  token: string;
+};
+
+function buildImportFormData(file: File, mapping: ColumnMapping, config: ImportConfig): FormData {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('mapping', JSON.stringify(mapping));
+  formData.append('config', JSON.stringify(config));
+  return formData;
+}
+
+async function requestImport<T>(path: string, file: File, mapping: ColumnMapping, config: ImportConfig): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    body: buildImportFormData(file, mapping, config),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(error.detail || `Erro ${res.status}`);
+  }
+  return res.json();
+}
+
+export function previewImportacaoDesafio(
+  file: File,
+  mapping: ColumnMapping,
+  config: ImportConfig
+): Promise<ImportPreviewResult> {
+  return requestImport('/api/desafios/importar/preview', file, mapping, config);
+}
+
+export function confirmarImportacaoDesafio(
+  file: File,
+  mapping: ColumnMapping,
+  config: ImportConfig
+): Promise<Desafio> {
+  return requestImport('/api/desafios/importar/confirmar', file, mapping, config);
+}
+
+export function fetchDesafiosImportaveis(): Promise<Desafio[]> {
+  return request('/api/desafios?origem=csv_import');
+}

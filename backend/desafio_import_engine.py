@@ -20,3 +20,13 @@ def normalizar_clan(raw: str) -> str:
         return f"CLÃ {int(raw.strip())}"
     except (ValueError, AttributeError):
         return raw.strip()
+
+
+def parse_submitted_at(raw: str) -> datetime | None:
+    """Faz parse de 'dd/mm/yyyy HH:MM:SS'. Retorna None se ilegível ou vazio."""
+    if not raw or not raw.strip():
+        return None
+    try:
+        return datetime.strptime(raw.strip(), "%d/%m/%Y %H:%M:%S")
+    except ValueError:
+        return None

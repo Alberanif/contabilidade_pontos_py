@@ -1,9 +1,15 @@
 import sys
 import os
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from desafio_import_engine import normalizar_validado, normalizar_nome, normalizar_clan
+from desafio_import_engine import (
+    normalizar_validado,
+    normalizar_nome,
+    normalizar_clan,
+    parse_submitted_at,
+)
 
 
 class TestNormalizarValidado:
@@ -51,3 +57,19 @@ class TestNormalizarClan:
     def test_nao_numerico_mantido_como_esta(self):
         # Mesmo fallback de _normalize_clan em routers/contabilidade.py
         assert normalizar_clan("abc") == "abc"
+
+
+class TestParseSubmittedAt:
+
+    def test_formato_completo_com_hora(self):
+        assert parse_submitted_at("11/05/2026 14:34:00") == datetime(2026, 5, 11, 14, 34, 0)
+
+    def test_data_invalida_retorna_none(self):
+        # Junho só tem 30 dias
+        assert parse_submitted_at("31/06/2026 10:00:00") is None
+
+    def test_texto_nao_reconhecido_retorna_none(self):
+        assert parse_submitted_at("não é uma data") is None
+
+    def test_vazio_retorna_none(self):
+        assert parse_submitted_at("") is None

@@ -14,6 +14,8 @@ from desafio_import_engine import (
     filtrar_por_periodo,
     filtrar_clans_validos,
     filtrar_tokens_novos,
+    deduplicar_por_pessoa,
+    ContabilizacaoRow,
 )
 
 MAPPING = {
@@ -43,6 +45,13 @@ def _row_com_token(token):
     return ImportRow(
         clan="CLÃ 1", nome="X", nome_normalizado="x",
         validado=True, submitted_at=datetime(2026, 5, 20, 10, 0, 0), token=token,
+    )
+
+
+def _row_pessoa(clan, nome, submitted_at):
+    return ImportRow(
+        clan=clan, nome=nome, nome_normalizado=normalizar_nome(nome),
+        validado=True, submitted_at=submitted_at, token=f"{clan}-{nome}",
     )
 
 
@@ -193,3 +202,32 @@ class TestFiltrarTokensNovos:
         row = _row_com_token("ja_visto")
         novos, repetidos = filtrar_tokens_novos([row], {"ja_visto"})
         assert novos == [] and repetidos == [row]
+
+
+class TestDeduplicarPorPessoa:
+
+    def test_pessoa_unica_conta(self):
+        row = _row(datetime(2026, 5, 25, 16, 3, 30))
+        result = deduplicar_por_pessoa([row])
+        assert result == [ContabilizacaoRow(row=row, contabilizado=True)]
+
+    def test_duas_submissoes_mesma_pessoa_so_a_mais_recente_conta(self):
+        antiga = ImportRow(
+            clan="CLÃ 1", nome="Luciana Batista", nome_normalizado="luciana batista",
+            validado=True, submitted_at=datetime(2026, 6, 26, 17, 59, 7), token="1tih",
+        )
+        recente = ImportRow(
+            clan="CLÃ 1", nome="Luciana Batista", nome_normalizado="luciana batista",
+            validado=True, submitted_at=datetime(2026, 6, 30, 1, 14, 36), token="9w3r",
+        )
+        result = deduplicar_por_pessoa([antiga, recente])
+        assert set(result) == {
+            ContabilizacaoRow(row=antiga, contabilizado=False),
+            ContabilizacaoRow(row=recente, contabilizado=True),
+        }
+
+    def test_pessoas_diferentes_mesmo_clan_ambas_contam(self):
+        ana = _row_pessoa("CLÃ 1", "Ana Albertim", datetime(2026, 5, 25, 16, 3, 30))
+        gustavo = _row_pessoa("CLÃ 1", "Gustavo Imhof", datetime(2026, 5, 31, 5, 2, 47))
+        result = deduplicar_por_pessoa([ana, gustavo])
+        assert all(r.contabilizado for r in result)

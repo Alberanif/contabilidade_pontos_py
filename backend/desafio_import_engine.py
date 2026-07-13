@@ -89,3 +89,24 @@ def filtrar_tokens_novos(
     novos = [r for r in rows if r.token not in tokens_ja_importados]
     repetidos = [r for r in rows if r.token in tokens_ja_importados]
     return novos, repetidos
+
+
+@dataclass(frozen=True)
+class ContabilizacaoRow:
+    row: ImportRow
+    contabilizado: bool
+
+
+def deduplicar_por_pessoa(rows: list[ImportRow]) -> list[ContabilizacaoRow]:
+    """Agrupa por (clã, nome normalizado); só a submissão mais recente de cada
+    pessoa conta para a pontuação. As demais são marcadas contabilizado=False
+    (permanecem na auditoria, mas não somam pontos)."""
+    mais_recente_por_pessoa: dict[tuple[str, str], ImportRow] = {}
+    for row in rows:
+        chave = (row.clan, row.nome_normalizado)
+        atual = mais_recente_por_pessoa.get(chave)
+        if atual is None or (row.submitted_at or datetime.min) > (atual.submitted_at or datetime.min):
+            mais_recente_por_pessoa[chave] = row
+
+    vencedores = set(mais_recente_por_pessoa.values())
+    return [ContabilizacaoRow(row=row, contabilizado=row in vencedores) for row in rows]

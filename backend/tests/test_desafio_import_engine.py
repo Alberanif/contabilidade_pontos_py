@@ -3,7 +3,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from desafio_import_engine import normalizar_validado
+from desafio_import_engine import normalizar_validado, normalizar_nome
 
 
 class TestNormalizarValidado:
@@ -25,3 +25,16 @@ class TestNormalizarValidado:
 
     def test_valor_ambiguo_e_falso(self):
         assert normalizar_validado("Talvez") is False
+
+
+class TestNormalizarNome:
+
+    def test_trim_e_lowercase(self):
+        assert normalizar_nome("  Ana Albertim  ") == "ana albertim"
+
+    def test_mesma_pessoa_capitalizacao_diferente(self):
+        # Caso real do CSV: "Carolina dorte gadbem" vs "carolina dorte gadbem"
+        assert normalizar_nome("Carolina dorte gadbem") == normalizar_nome("carolina dorte gadbem")
+
+    def test_espacos_internos_multiplos_preservados(self):
+        assert normalizar_nome("Ana  Paula") == "ana  paula"

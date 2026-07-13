@@ -7,3 +7,8 @@ from datetime import date, datetime
 def normalizar_validado(raw: str) -> bool:
     """Só conta como validado um valor cuja forma normalizada seja exatamente 'sim'."""
     return raw.strip().lower() == "sim"
+
+
+def normalizar_nome(raw: str) -> str:
+    """Normaliza nome para comparação de dedup: trim + lowercase."""
+    return raw.strip().lower()

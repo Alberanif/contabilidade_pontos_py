@@ -124,6 +124,12 @@ def editar_desafio(desafio_id: int, body: DesafioUpdate):
     if not desafio:
         raise HTTPException(status_code=404, detail="Desafio não encontrado")
 
+    if desafio.get("origem") == "csv_import":
+        raise HTTPException(
+            status_code=400,
+            detail="Desafios importados via CSV são editados pelo wizard de reimportação, não por este formulário.",
+        )
+
     _validar_periodo_e_registros(body.data_inicio, body.data_fim, body.registros)
 
     old_contabilizar = desafio["contabilizar_pontos"]

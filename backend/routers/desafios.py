@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Any, Optional
+from pydantic import BaseModel, Field
+from typing import Any
 from datetime import date
 
 import supabase_client
@@ -8,31 +8,63 @@ import points_engine
 
 router = APIRouter()
 
+NOME_CAMPO_PONTOS = "Pontos"
 
-class CampoInput(BaseModel):
-    id: Optional[int] = None
-    nome: str
-    tipo: str  # 'texto' | 'pontuacao'
-    ordem: int = 0
+
+class RegistroClanInput(BaseModel):
+    clan: str
+    pontos: int = Field(ge=0)
 
 
 class DesafioCreate(BaseModel):
     nome: str
     contabilizar_pontos: bool = True
-    data: date
-    campos: list[CampoInput]
+    data_inicio: date
+    data_fim: date
+    registros: list[RegistroClanInput] = []
 
 
 class DesafioUpdate(BaseModel):
     nome: str
     contabilizar_pontos: bool
-    data: date
-    campos: list[CampoInput]
+    data_inicio: date
+    data_fim: date
+    registros: list[RegistroClanInput] = []
 
 
 class RegistroCreate(BaseModel):
     clan: str
     valores: dict[str, Any]
+
+
+def _validar_periodo_e_registros(
+    data_inicio: date, data_fim: date, registros: list[RegistroClanInput]
+) -> None:
+    if data_fim < data_inicio:
+        raise HTTPException(
+            status_code=400, detail="data_fim deve ser maior ou igual a data_inicio"
+        )
+    clans = [r.clan for r in registros]
+    if len(clans) != len(set(clans)):
+        raise HTTPException(
+            status_code=400,
+            detail="Um mesmo clã não pode aparecer duas vezes na lista de registros",
+        )
+
+
+def _ensure_campo_pontos(desafio_id: int) -> dict:
+    """Garante que o desafio tenha exatamente um campo implícito 'Pontos'
+    (tipo pontuacao). Se os campos atuais forem diferentes (desafio legado
+    com campos customizados), apaga todos e recria o campo implícito —
+    essa é a conversão permanente para o novo formato."""
+    campos = supabase_client.list_desafio_campos(desafio_id)
+    if len(campos) == 1 and campos[0]["nome"] == NOME_CAMPO_PONTOS and campos[0]["tipo"] == "pontuacao":
+        return campos[0]
+    supabase_client.delete_desafio_campos(desafio_id)
+    novos = supabase_client.insert_desafio_campos(
+        [{"desafio_id": desafio_id, "nome": NOME_CAMPO_PONTOS, "tipo": "pontuacao", "ordem": 0}]
+    )
+    return novos[0]
 
 
 @router.get("")
@@ -58,72 +90,83 @@ def listar_desafios():
 
 @router.post("")
 def criar_desafio(body: DesafioCreate):
-    """Cria um novo desafio com seus campos."""
-    desafio = supabase_client.create_desafio(body.nome, body.contabilizar_pontos, body.data)
-    campos_data = [
-        {"desafio_id": desafio["id"], "nome": c.nome, "tipo": c.tipo, "ordem": c.ordem}
-        for c in body.campos
-    ]
-    campos = supabase_client.insert_desafio_campos(campos_data) if campos_data else []
-    return {**desafio, "campos": campos, "total_registros": 0}
+    """Cria um novo desafio manual com período e registros de clã/pontuação."""
+    _validar_periodo_e_registros(body.data_inicio, body.data_fim, body.registros)
+
+    desafio = supabase_client.create_desafio(
+        body.nome,
+        body.contabilizar_pontos,
+        body.data_fim,
+        data_inicio=body.data_inicio,
+        data_fim=body.data_fim,
+        origem="manual",
+    )
+    campo_pontos = _ensure_campo_pontos(desafio["id"])
+
+    for r in body.registros:
+        supabase_client.create_desafio_registro(
+            desafio["id"], r.clan, {str(campo_pontos["id"]): r.pontos}, r.pontos
+        )
+        if body.contabilizar_pontos and r.pontos > 0:
+            supabase_client.add_delta_to_clan_total(r.clan, r.pontos)
+
+    return {**desafio, "campos": [campo_pontos], "total_registros": len(body.registros)}
 
 
 @router.put("/{desafio_id}")
 def editar_desafio(desafio_id: int, body: DesafioUpdate):
-    """Edita nome, modo de contabilização e campos. Recalcula registros existentes."""
+    """Edita nome, período, modo de contabilização e registros de clã/pontuação.
+
+    Desafios legados com campos customizados são convertidos para o campo
+    implícito único 'Pontos' ao serem salvos por aqui (ver _ensure_campo_pontos).
+    """
     desafio = supabase_client.get_desafio(desafio_id)
     if not desafio:
         raise HTTPException(status_code=404, detail="Desafio não encontrado")
 
+    _validar_periodo_e_registros(body.data_inicio, body.data_fim, body.registros)
+
     old_contabilizar = desafio["contabilizar_pontos"]
     new_contabilizar = body.contabilizar_pontos
 
-    registros = supabase_client.list_desafio_registros(desafio_id)
+    old_registros = supabase_client.list_desafio_registros(desafio_id)
+    diff = points_engine.diff_desafio_registros(
+        [
+            {"id": r["id"], "clan": r["clan"], "total_pontos": r["total_pontos"]}
+            for r in old_registros
+        ],
+        [{"clan": r.clan, "pontos": r.pontos} for r in body.registros],
+        old_contabilizar,
+        new_contabilizar,
+    )
 
-    # Atualizar campos com diff para preservar IDs existentes
-    old_campo_ids = {c["id"] for c in supabase_client.list_desafio_campos(desafio_id)}
-    incoming_ids = {c.id for c in body.campos if c.id is not None}
-    ids_to_delete = old_campo_ids - incoming_ids
+    campo_pontos = _ensure_campo_pontos(desafio_id)
 
-    for campo_id in ids_to_delete:
-        supabase_client.delete_desafio_campo(campo_id)
+    for registro_id in diff["to_delete"]:
+        supabase_client.delete_desafio_registro(registro_id)
 
-    new_campos_to_insert = []
-    for c in body.campos:
-        if c.id is not None and c.id in old_campo_ids:
-            supabase_client.update_desafio_campo(c.id, c.nome, c.tipo, c.ordem)
-        else:
-            new_campos_to_insert.append(
-                {"desafio_id": desafio_id, "nome": c.nome, "tipo": c.tipo, "ordem": c.ordem}
-            )
-    if new_campos_to_insert:
-        supabase_client.insert_desafio_campos(new_campos_to_insert)
+    for item in diff["to_create"]:
+        supabase_client.create_desafio_registro(
+            desafio_id, item["clan"], {str(campo_pontos["id"]): item["pontos"]}, item["pontos"]
+        )
 
-    new_campos = supabase_client.list_desafio_campos(desafio_id)
+    for item in diff["to_update"]:
+        supabase_client.update_desafio_registro_pontos(
+            item["id"], {str(campo_pontos["id"]): item["pontos"]}, item["pontos"]
+        )
 
-    # Recalcular cada registro e aplicar deltas no total do clã
-    for reg in registros:
-        old_total = reg["total_pontos"]
-        new_total = points_engine.calculate_desafio_pontos(new_campos, reg["valores"])
-        supabase_client.update_desafio_registro_pontos(reg["id"], reg["valores"], new_total)
+    for clan, delta in diff["clan_deltas"].items():
+        supabase_client.add_delta_to_clan_total(clan, delta)
 
-        if old_contabilizar and new_contabilizar:
-            # Ambos true: aplicar apenas o delta
-            delta = new_total - old_total
-            if delta != 0:
-                supabase_client.add_delta_to_clan_total(reg["clan"], delta)
-        elif old_contabilizar and not new_contabilizar:
-            # true → false: descontar pontos antigos
-            if old_total > 0:
-                supabase_client.add_delta_to_clan_total(reg["clan"], -old_total)
-        elif not old_contabilizar and new_contabilizar:
-            # false → true: adicionar novos pontos
-            if new_total > 0:
-                supabase_client.add_delta_to_clan_total(reg["clan"], new_total)
-        # false → false: nenhum efeito no ranking
-
-    updated = supabase_client.update_desafio(desafio_id, body.nome, new_contabilizar, body.data)
-    return {**updated, "campos": new_campos, "total_registros": len(registros)}
+    updated = supabase_client.update_desafio(
+        desafio_id,
+        body.nome,
+        new_contabilizar,
+        body.data_fim,
+        data_inicio=body.data_inicio,
+        data_fim=body.data_fim,
+    )
+    return {**updated, "campos": [campo_pontos], "total_registros": len(body.registros)}
 
 
 @router.delete("/{desafio_id}")

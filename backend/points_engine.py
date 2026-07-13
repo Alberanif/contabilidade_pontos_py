@@ -227,3 +227,62 @@ def calculate_desafio_pontos(campos: list[dict], valores: dict) -> int:
             except (ValueError, TypeError):
                 pass
     return total
+
+
+def diff_desafio_registros(
+    old_registros: list[dict],
+    new_registros: list[dict],
+    old_contabilizar: bool,
+    new_contabilizar: bool,
+) -> dict:
+    """Calcula o diff entre os registros existentes de um desafio e a nova
+    lista clã→pontos enviada na edição.
+
+    old_registros: [{'id': int, 'clan': str, 'total_pontos': int}]
+    new_registros: [{'clan': str, 'pontos': int}]
+
+    Retorna to_delete (ids a excluir), to_create ({clan, pontos}),
+    to_update ({id, clan, pontos} — inclui clãs sem mudança de pontuação,
+    pois o valor ainda precisa ser regravado apontando pro campo atual) e
+    clan_deltas (delta líquido por clã, só entradas != 0, para aplicar em
+    add_delta_to_clan_total).
+    """
+    old_by_clan = {r["clan"]: r for r in old_registros}
+    new_by_clan = {r["clan"]: r["pontos"] for r in new_registros}
+
+    to_delete: list[int] = []
+    to_create: list[dict] = []
+    to_update: list[dict] = []
+    clan_deltas: dict[str, int] = {}
+
+    for clan, old_reg in old_by_clan.items():
+        if clan not in new_by_clan:
+            to_delete.append(old_reg["id"])
+            if old_contabilizar and old_reg["total_pontos"] != 0:
+                clan_deltas[clan] = clan_deltas.get(clan, 0) - old_reg["total_pontos"]
+
+    for clan, pontos in new_by_clan.items():
+        old_reg = old_by_clan.get(clan)
+        if old_reg is None:
+            to_create.append({"clan": clan, "pontos": pontos})
+            if new_contabilizar and pontos != 0:
+                clan_deltas[clan] = clan_deltas.get(clan, 0) + pontos
+        else:
+            to_update.append({"id": old_reg["id"], "clan": clan, "pontos": pontos})
+            if old_contabilizar and new_contabilizar:
+                delta = pontos - old_reg["total_pontos"]
+            elif old_contabilizar and not new_contabilizar:
+                delta = -old_reg["total_pontos"]
+            elif not old_contabilizar and new_contabilizar:
+                delta = pontos
+            else:
+                delta = 0
+            if delta != 0:
+                clan_deltas[clan] = clan_deltas.get(clan, 0) + delta
+
+    return {
+        "to_delete": to_delete,
+        "to_create": to_create,
+        "to_update": to_update,
+        "clan_deltas": clan_deltas,
+    }

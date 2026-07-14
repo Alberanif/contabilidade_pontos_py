@@ -55,6 +55,7 @@ def _processar(file: UploadFile, mapping_json: str, config_json: str) -> tuple[d
         data_inicio=config.data_inicio,
         data_fim=config.data_fim,
         pontos_por_participacao=config.pontos_por_participacao,
+        coach_alias_map=supabase_client.get_coach_alias_map(),
     )
     return result, config
 
@@ -70,6 +71,8 @@ def preview(
     return {
         "pontos_por_clan": result.pontos_por_clan,
         "participacoes_por_clan": result.participacoes_por_clan,
+        "pontos_por_coach": result.pontos_por_coach,
+        "participacoes_por_coach": result.participacoes_por_coach,
         "avisos": result.avisos,
         "total_linhas_contabilizadas": sum(result.participacoes_por_clan.values()),
     }
@@ -131,6 +134,21 @@ def confirmar(
         else:
             supabase_client.create_desafio_registro(desafio["id"], clan, valores, pontos)
             supabase_client.add_delta_to_clan_total(clan, pontos)
+
+    for coach, participacoes in result.participacoes_por_coach.items():
+        pontos = result.pontos_por_coach[coach]
+        valores = {str(campo_participacoes["id"]): str(participacoes), str(campo_pontuacao["id"]): pontos}
+
+        existente_coach = supabase_client.get_desafio_registro_coach_by_coach(desafio["id"], coach)
+        if existente_coach:
+            novo_total = points_engine.calculate_desafio_pontos(campos, valores)
+            delta = novo_total - existente_coach["total_pontos"]
+            supabase_client.update_desafio_registro_coach_pontos(existente_coach["id"], valores, novo_total)
+            if delta != 0:
+                supabase_client.add_delta_to_coach_total(coach, delta)
+        else:
+            supabase_client.create_desafio_registro_coach(desafio["id"], coach, valores, pontos)
+            supabase_client.add_delta_to_coach_total(coach, pontos)
 
     campos_atualizados = supabase_client.list_desafio_campos(desafio["id"])
     registros = supabase_client.list_desafio_registros(desafio["id"])

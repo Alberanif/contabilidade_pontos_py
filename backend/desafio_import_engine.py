@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
+import coach_identity
+
 
 def normalizar_validado(raw: str) -> bool:
     """Só conta como validado um valor cuja forma normalizada seja exatamente 'sim'."""
@@ -37,18 +39,23 @@ class ImportRow:
     clan: str
     nome: str
     nome_normalizado: str
+    coach: str
     validado: bool
     submitted_at: datetime | None
     token: str
 
 
-def parse_row(raw_row: dict, mapping: dict) -> ImportRow:
-    """Extrai e normaliza uma linha do CSV usando o mapeamento de colunas escolhido no wizard."""
+def parse_row(raw_row: dict, mapping: dict, coach_alias_map: dict[str, str]) -> ImportRow:
+    """Extrai e normaliza uma linha do CSV usando o mapeamento de colunas escolhido no wizard.
+
+    coach = mesma coluna 'Nome' já mapeada, resolvida para o nome canônico via
+    coach_identity (quem preenche o formulário é o próprio coach)."""
     nome = raw_row.get(mapping["nome"], "").strip()
     return ImportRow(
         clan=normalizar_clan(raw_row.get(mapping["clan"], "")),
         nome=nome,
         nome_normalizado=normalizar_nome(nome),
+        coach=coach_identity.resolve_coach(nome, coach_alias_map),
         validado=normalizar_validado(raw_row.get(mapping["validado"], "")),
         submitted_at=parse_submitted_at(raw_row.get(mapping["submitted_at"], "")),
         token=raw_row.get(mapping["token"], "").strip(),
@@ -116,6 +123,8 @@ def deduplicar_por_pessoa(rows: list[ImportRow]) -> list[ContabilizacaoRow]:
 class ImportResult:
     pontos_por_clan: dict[str, int] = field(default_factory=dict)
     participacoes_por_clan: dict[str, int] = field(default_factory=dict)
+    pontos_por_coach: dict[str, int] = field(default_factory=dict)
+    participacoes_por_coach: dict[str, int] = field(default_factory=dict)
     linhas_auditoria: list[dict] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
 
@@ -128,6 +137,7 @@ def processar_importacao(
     data_inicio: date,
     data_fim: date,
     pontos_por_participacao: int,
+    coach_alias_map: dict[str, str],
 ) -> ImportResult:
     """Pipeline completo: parse → período → clã válido → token novo → dedup de pessoa → agregação.
 
@@ -135,8 +145,11 @@ def processar_importacao(
     se a linha pertence a este desafio), depois clã (senão avisos de clã inválido
     incluiriam linhas de outros desafios), depois dedup entre importações (token),
     e por último dedup dentro do lote (pessoa), que só faz sentido sobre o conjunto final.
+
+    Pontos de coach usam a mesma submissão vencedora (contabilizado=True) que já
+    decide os pontos de clã — coach = a mesma coluna 'Nome', resolvida ao canônico.
     """
-    parsed = [parse_row(r, mapping) for r in raw_rows]
+    parsed = [parse_row(r, mapping, coach_alias_map) for r in raw_rows]
 
     dentro_periodo, fora_periodo = filtrar_por_periodo(parsed, data_inicio, data_fim)
     validos, invalidos = filtrar_clans_validos(dentro_periodo, clans_validos)
@@ -150,6 +163,7 @@ def processar_importacao(
         result.linhas_auditoria.append({
             "clan": row.clan,
             "nome_participante": row.nome,
+            "coach": row.coach,
             "validado": row.validado,
             "contabilizado": row.validado and item.contabilizado,
             "submitted_at": row.submitted_at,
@@ -158,6 +172,9 @@ def processar_importacao(
         if row.validado and item.contabilizado:
             result.participacoes_por_clan[row.clan] = result.participacoes_por_clan.get(row.clan, 0) + 1
             result.pontos_por_clan[row.clan] = result.participacoes_por_clan[row.clan] * pontos_por_participacao
+
+            result.participacoes_por_coach[row.coach] = result.participacoes_por_coach.get(row.coach, 0) + 1
+            result.pontos_por_coach[row.coach] = result.participacoes_por_coach[row.coach] * pontos_por_participacao
 
     if invalidos:
         clans_desconhecidos = sorted({r.clan for r in invalidos})

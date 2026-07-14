@@ -39,28 +39,28 @@ MAPPING = {
 
 def _row(submitted_at):
     return ImportRow(
-        clan="CLÃ 1", nome="X", nome_normalizado="x",
+        clan="CLÃ 1", nome="X", nome_normalizado="x", coach="X",
         validado=True, submitted_at=submitted_at, token="t1",
     )
 
 
 def _row_com_clan(clan):
     return ImportRow(
-        clan=clan, nome="X", nome_normalizado="x",
+        clan=clan, nome="X", nome_normalizado="x", coach="X",
         validado=True, submitted_at=datetime(2026, 5, 20, 10, 0, 0), token="t1",
     )
 
 
 def _row_com_token(token):
     return ImportRow(
-        clan="CLÃ 1", nome="X", nome_normalizado="x",
+        clan="CLÃ 1", nome="X", nome_normalizado="x", coach="X",
         validado=True, submitted_at=datetime(2026, 5, 20, 10, 0, 0), token=token,
     )
 
 
 def _row_pessoa(clan, nome, submitted_at):
     return ImportRow(
-        clan=clan, nome=nome, nome_normalizado=normalizar_nome(nome),
+        clan=clan, nome=nome, nome_normalizado=normalizar_nome(nome), coach=nome,
         validado=True, submitted_at=submitted_at, token=f"{clan}-{nome}",
     )
 
@@ -92,7 +92,6 @@ class TestNormalizarNome:
         assert normalizar_nome("  Ana Albertim  ") == "ana albertim"
 
     def test_mesma_pessoa_capitalizacao_diferente(self):
-        # Caso real do CSV: "Carolina dorte gadbem" vs "carolina dorte gadbem"
         assert normalizar_nome("Carolina dorte gadbem") == normalizar_nome("carolina dorte gadbem")
 
     def test_espacos_internos_multiplos_preservados(self):
@@ -108,7 +107,6 @@ class TestNormalizarClan:
         assert normalizar_clan(" 8 ") == "CLÃ 8"
 
     def test_nao_numerico_mantido_como_esta(self):
-        # Mesmo fallback de _normalize_clan em routers/contabilidade.py
         assert normalizar_clan("abc") == "abc"
 
 
@@ -118,7 +116,6 @@ class TestParseSubmittedAt:
         assert parse_submitted_at("11/05/2026 14:34:00") == datetime(2026, 5, 11, 14, 34, 0)
 
     def test_data_invalida_retorna_none(self):
-        # Junho só tem 30 dias
         assert parse_submitted_at("31/06/2026 10:00:00") is None
 
     def test_texto_nao_reconhecido_retorna_none(self):
@@ -138,11 +135,12 @@ class TestParseRow:
             "Submitted At": "11/05/2026 14:34:00",
             "Token": "gqf0oqvq3c1s7e76nj1gqf0oqk9mpyn0",
         }
-        row = parse_row(raw_row, MAPPING)
+        row = parse_row(raw_row, MAPPING, {})
         assert row == ImportRow(
             clan="CLÃ 2",
             nome="Vinicius Alves",
             nome_normalizado="vinicius alves",
+            coach="Vinicius Alves",
             validado=True,
             submitted_at=datetime(2026, 5, 11, 14, 34, 0),
             token="gqf0oqvq3c1s7e76nj1gqf0oqk9mpyn0",
@@ -150,8 +148,19 @@ class TestParseRow:
 
     def test_linha_com_data_ilegivel(self):
         raw_row = {**{k: "" for k in MAPPING.values()}, MAPPING["submitted_at"]: "lixo"}
-        row = parse_row(raw_row, MAPPING)
+        row = parse_row(raw_row, MAPPING, {})
         assert row.submitted_at is None
+
+    def test_coach_resolvido_via_alias_map(self):
+        raw_row = {
+            "Selecionar o Clã em que você está (1 a 8):": "1",
+            "Coloque aqui o seu Nome:": "Vini Marini",
+            "Você cumpriu o Desafio Pontual G?": "Sim",
+            "Submitted At": "11/05/2026 14:34:00",
+            "Token": "tok1",
+        }
+        row = parse_row(raw_row, MAPPING, {"Vini Marini": "Vinicius Marini"})
+        assert row.coach == "Vinicius Marini"
 
 
 class TestFiltrarPorPeriodo:
@@ -173,7 +182,6 @@ class TestFiltrarPorPeriodo:
         assert dentro == [] and fora == [row]
 
     def test_depois_do_periodo_excluido(self):
-        # Caso real: submissão de "Desafio H" em julho não deve contar pro "Desafio G"
         row = _row(datetime(2026, 7, 5, 0, 10, 21))
         dentro, fora = filtrar_por_periodo([row], date(2026, 5, 11), date(2026, 6, 30))
         assert dentro == [] and fora == [row]
@@ -208,7 +216,6 @@ class TestFiltrarTokensNovos:
         assert novos == [row] and repetidos == []
 
     def test_token_ja_importado_e_pulado(self):
-        # Reimportação incremental: mesma linha não deve ser reprocessada
         row = _row_com_token("ja_visto")
         novos, repetidos = filtrar_tokens_novos([row], {"ja_visto"})
         assert novos == [] and repetidos == [row]
@@ -224,10 +231,12 @@ class TestDeduplicarPorPessoa:
     def test_duas_submissoes_mesma_pessoa_so_a_mais_recente_conta(self):
         antiga = ImportRow(
             clan="CLÃ 1", nome="Luciana Batista", nome_normalizado="luciana batista",
+            coach="Luciana Batista",
             validado=True, submitted_at=datetime(2026, 6, 26, 17, 59, 7), token="1tih",
         )
         recente = ImportRow(
             clan="CLÃ 1", nome="Luciana Batista", nome_normalizado="luciana batista",
+            coach="Luciana Batista",
             validado=True, submitted_at=datetime(2026, 6, 30, 1, 14, 36), token="9w3r",
         )
         result = deduplicar_por_pessoa([antiga, recente])
@@ -249,11 +258,11 @@ class TestProcessarImportacao:
         raw_rows = [
             _raw("1", "Ana Albertim", "Sim", "25/05/2026 16:03:30", "AAA"),
             _raw("1", "Luciana Batista", "Sim", "26/06/2026 17:59:07", "BBB1"),
-            _raw("1", "Luciana Batista", "Sim", "30/06/2026 01:14:36", "BBB2"),  # reenvio, mais recente
+            _raw("1", "Luciana Batista", "Sim", "30/06/2026 01:14:36", "BBB2"),
             _raw("8", "Paula Petroli Pierozzi", "Sim", "21/06/2026 23:18:42", "CCC"),
-            _raw("9", "Alguem", "Sim", "01/06/2026 00:00:00", "DDD"),            # clã inexistente
-            _raw("1", "Outra Pessoa", "Não", "01/06/2026 00:00:00", "EEE"),      # não validado
-            _raw("1", "Mais Alguem", "Sim", "05/07/2026 00:10:21", "FFF"),       # fora do período
+            _raw("9", "Alguem", "Sim", "01/06/2026 00:00:00", "DDD"),
+            _raw("1", "Outra Pessoa", "Não", "01/06/2026 00:00:00", "EEE"),
+            _raw("1", "Mais Alguem", "Sim", "05/07/2026 00:10:21", "FFF"),
         ]
         result = processar_importacao(
             raw_rows=raw_rows,
@@ -263,16 +272,24 @@ class TestProcessarImportacao:
             data_inicio=date(2026, 5, 11),
             data_fim=date(2026, 6, 30),
             pontos_por_participacao=10,
+            coach_alias_map={},
         )
 
         assert result.pontos_por_clan == {"CLÃ 1": 20, "CLÃ 8": 10}
         assert result.participacoes_por_clan == {"CLÃ 1": 2, "CLÃ 8": 1}
-        assert len(result.avisos) >= 2  # clã 9 inválido + linha fora do período
+        assert result.pontos_por_coach == {
+            "Ana Albertim": 10, "Luciana Batista": 10, "Paula Petroli Pierozzi": 10,
+        }
+        assert result.participacoes_por_coach == {
+            "Ana Albertim": 1, "Luciana Batista": 1, "Paula Petroli Pierozzi": 1,
+        }
+        assert len(result.avisos) >= 2
 
         auditoria_por_token = {a["token_original"]: a for a in result.linhas_auditoria}
         assert set(auditoria_por_token) == {"AAA", "BBB1", "BBB2", "CCC", "EEE"}
         assert auditoria_por_token["BBB1"]["contabilizado"] is False
         assert auditoria_por_token["BBB2"]["contabilizado"] is True
+        assert auditoria_por_token["BBB2"]["coach"] == "Luciana Batista"
         assert auditoria_por_token["EEE"]["validado"] is False
         assert auditoria_por_token["EEE"]["contabilizado"] is False
 
@@ -286,6 +303,26 @@ class TestProcessarImportacao:
             data_inicio=date(2026, 5, 11),
             data_fim=date(2026, 6, 30),
             pontos_por_participacao=10,
+            coach_alias_map={},
         )
         assert result.pontos_por_clan == {}
+        assert result.pontos_por_coach == {}
         assert result.linhas_auditoria == []
+
+    def test_coach_com_alias_agrega_sob_canonico(self):
+        raw_rows = [
+            _raw("1", "Vini Marini", "Sim", "20/05/2026 10:00:00", "T1"),
+            _raw("1", "Ana Albertim", "Sim", "21/05/2026 10:00:00", "T2"),
+        ]
+        result = processar_importacao(
+            raw_rows=raw_rows,
+            mapping=MAPPING_TESTE,
+            clans_validos={"CLÃ 1"},
+            tokens_ja_importados=set(),
+            data_inicio=date(2026, 5, 11),
+            data_fim=date(2026, 6, 30),
+            pontos_por_participacao=10,
+            coach_alias_map={"Vini Marini": "Vinicius Marini"},
+        )
+        assert result.pontos_por_coach == {"Vinicius Marini": 10, "Ana Albertim": 10}
+        assert result.participacoes_por_coach == {"Vinicius Marini": 1, "Ana Albertim": 1}

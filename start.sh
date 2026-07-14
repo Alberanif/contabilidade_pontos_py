@@ -12,7 +12,11 @@ trap cleanup EXIT INT TERM
 
 (
   cd "$ROOT_DIR/backend"
-  source "$ROOT_DIR/venv/Scripts/activate"
+  if [ -f "$ROOT_DIR/venv/bin/activate" ]; then
+    source "$ROOT_DIR/venv/bin/activate"
+  else
+    source "$ROOT_DIR/venv/Scripts/activate"
+  fi
   python main.py
 ) &
 BACKEND_PID=$!

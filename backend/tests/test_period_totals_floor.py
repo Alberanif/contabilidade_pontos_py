@@ -205,3 +205,44 @@ class TestGetTipoCoachTotalsFloor:
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pro_bono", INICIO, FIM)
         assert result["Coach A"] == 10
+
+
+def _mock_sequential_client(desafios_rows, registros_rows):
+    result_desafios = MagicMock()
+    result_desafios.data = desafios_rows
+    chain_desafios = MagicMock()
+    chain_desafios.execute.return_value = result_desafios
+    for m in ("table", "select", "gte", "lte", "eq"):
+        getattr(chain_desafios, m).return_value = chain_desafios
+
+    result_registros = MagicMock()
+    result_registros.data = registros_rows
+    chain_registros = MagicMock()
+    chain_registros.execute.return_value = result_registros
+    for m in ("table", "select", "in_"):
+        getattr(chain_registros, m).return_value = chain_registros
+
+    client = MagicMock()
+    client.table.side_effect = [chain_desafios, chain_registros]
+    return client
+
+
+class TestGetPeriodDesafioCoachTotals:
+
+    def test_soma_pontos_de_coach_dos_desafios_no_periodo(self):
+        desafios_rows = [{"id": 1}]
+        registros_rows = [
+            {"coach": "Ana Albertim", "total_pontos": 20},
+            {"coach": "Ana Albertim", "total_pontos": 10},
+            {"coach": "Gustavo Imhof", "total_pontos": 10},
+        ]
+        with patch("supabase_client._get_client",
+                   return_value=_mock_sequential_client(desafios_rows, registros_rows)):
+            result = supabase_client.get_period_desafio_coach_totals(INICIO, FIM)
+        assert result == {"Ana Albertim": 30, "Gustavo Imhof": 10}
+
+    def test_sem_desafio_no_periodo_retorna_vazio(self):
+        with patch("supabase_client._get_client",
+                   return_value=_mock_sequential_client([], [])):
+            result = supabase_client.get_period_desafio_coach_totals(INICIO, FIM)
+        assert result == {}

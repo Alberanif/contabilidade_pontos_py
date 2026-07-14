@@ -837,6 +837,42 @@ def get_period_desafio_totals(inicio: date, fim: date) -> dict[str, int]:
     return totals
 
 
+def get_period_desafio_coach_totals(inicio: date, fim: date) -> dict[str, int]:
+    """
+    Sum desafio points per coach for desafios within the period [inicio, fim].
+    Only includes desafios with contabilizar_pontos=true.
+    Returns dict[coach_name, total_pontos].
+    """
+    client = _get_client()
+
+    desafios_query = (
+        client.table(TABLE_DESAFIOS)
+        .select("id")
+        .gte("data", inicio.isoformat())
+        .lte("data", fim.isoformat())
+        .eq("contabilizar_pontos", True)
+    )
+    desafios = desafios_query.execute().data
+    desafio_ids = [d["id"] for d in desafios]
+
+    if not desafio_ids:
+        return {}
+
+    registros_query = (
+        client.table(TABLE_DESAFIO_REGISTROS_COACH)
+        .select("coach, total_pontos")
+        .in_("desafio_id", desafio_ids)
+    )
+    registros = registros_query.execute().data
+
+    totals = {}
+    for registro in registros:
+        coach = registro["coach"]
+        totals[coach] = totals.get(coach, 0) + registro["total_pontos"]
+
+    return totals
+
+
 def get_tipo_clan_totals(
     tipo: str,
     inicio: "date | None" = None,
@@ -922,7 +958,30 @@ def get_tipo_coach_totals(
     fim: "date | None" = None,
 ) -> dict[str, int]:
     if tipo == "desafios":
-        return {}
+        if inicio and fim:
+            return get_period_desafio_coach_totals(inicio, fim)
+        client = _get_client()
+        desafios = (
+            client.table(TABLE_DESAFIOS)
+            .select("id")
+            .eq("contabilizar_pontos", True)
+            .execute()
+            .data
+        )
+        desafio_ids = [d["id"] for d in desafios]
+        if not desafio_ids:
+            return {}
+        registros = (
+            client.table(TABLE_DESAFIO_REGISTROS_COACH)
+            .select("coach, total_pontos")
+            .in_("desafio_id", desafio_ids)
+            .execute()
+            .data
+        )
+        totals: dict[str, int] = {}
+        for r in registros:
+            totals[r["coach"]] = totals.get(r["coach"], 0) + r["total_pontos"]
+        return totals
 
     client = _get_client()
 

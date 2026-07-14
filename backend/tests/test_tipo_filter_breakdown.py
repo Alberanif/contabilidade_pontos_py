@@ -92,3 +92,59 @@ class TestGetTipoCoachTotalsNoDate:
         with patch("supabase_client._get_client", return_value=_mock_totais(rows)):
             result = supabase_client.get_tipo_coach_totals("pagante")
         assert result == {"Coach A": 900, "Coach B": 600}
+
+
+class TestGetTipoCoachTotalsDesafiosNoDate:
+    """Sem datas: lê desafio_registros_coach dos desafios com contabilizar_pontos=true."""
+
+    def test_soma_pontos_de_coach_dos_desafios_contabilizados(self):
+        client = MagicMock()
+
+        result_desafios = MagicMock()
+        result_desafios.data = [{"id": 1}, {"id": 2}]
+        chain_desafios = MagicMock()
+        chain_desafios.execute.return_value = result_desafios
+        for m in ("table", "select", "eq"):
+            getattr(chain_desafios, m).return_value = chain_desafios
+
+        result_registros = MagicMock()
+        result_registros.data = [
+            {"coach": "Ana Albertim", "total_pontos": 20},
+            {"coach": "Ana Albertim", "total_pontos": 10},
+        ]
+        chain_registros = MagicMock()
+        chain_registros.execute.return_value = result_registros
+        for m in ("table", "select", "in_"):
+            getattr(chain_registros, m).return_value = chain_registros
+
+        client.table.side_effect = [chain_desafios, chain_registros]
+
+        with patch("supabase_client._get_client", return_value=client):
+            result = supabase_client.get_tipo_coach_totals("desafios")
+        assert result == {"Ana Albertim": 30}
+
+    def test_sem_desafio_contabilizavel_retorna_vazio(self):
+        client = MagicMock()
+        result_desafios = MagicMock()
+        result_desafios.data = []
+        chain_desafios = MagicMock()
+        chain_desafios.execute.return_value = result_desafios
+        for m in ("table", "select", "eq"):
+            getattr(chain_desafios, m).return_value = chain_desafios
+        client.table.return_value = chain_desafios
+
+        with patch("supabase_client._get_client", return_value=client):
+            result = supabase_client.get_tipo_coach_totals("desafios")
+        assert result == {}
+
+
+class TestGetTipoCoachTotalsDesafiosComData:
+
+    def test_delega_para_get_period_desafio_coach_totals(self):
+        from datetime import date
+        inicio, fim = date(2026, 5, 1), date(2026, 6, 30)
+        with patch("supabase_client.get_period_desafio_coach_totals",
+                   return_value={"Ana Albertim": 30}) as mock_period:
+            result = supabase_client.get_tipo_coach_totals("desafios", inicio, fim)
+        mock_period.assert_called_once_with(inicio, fim)
+        assert result == {"Ana Albertim": 30}

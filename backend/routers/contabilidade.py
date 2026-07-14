@@ -728,14 +728,25 @@ def reprocessar_contabilidade():
             for coach, pts in source.items():
                 all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
-        for clan, total in all_points.items():
+        desafio_totals_clan = supabase_client.get_tipo_clan_totals("desafios")
+        desafio_totals_coach = supabase_client.get_tipo_coach_totals("desafios")
+
+        totais_finais_clan: dict[str, int] = {}
+        all_clans_final = set(all_points.keys()) | set(desafio_totals_clan.keys())
+        for clan in all_clans_final:
+            total = all_points.get(clan, 0) + desafio_totals_clan.get(clan, 0)
+            totais_finais_clan[clan] = total
             supabase_client.upsert_clan_total(
                 clan, total,
                 total_pagante=pagante_pts.get(clan, 0),
                 total_pro_bono=pro_bono_clan_pts.get(clan, 0),
             )
 
-        for coach, total in all_coach_points.items():
+        totais_finais_coach: dict[str, int] = {}
+        all_coaches_final = set(all_coach_points.keys()) | set(desafio_totals_coach.keys())
+        for coach in all_coaches_final:
+            total = all_coach_points.get(coach, 0) + desafio_totals_coach.get(coach, 0)
+            totais_finais_coach[coach] = total
             supabase_client.upsert_coach_total(
                 coach, total,
                 total_pagante=pontos_por_coach.get(coach, 0),
@@ -759,9 +770,9 @@ def reprocessar_contabilidade():
             pontos_por_clan=pontos_por_clan,
             pontos_grupo_por_clan=pontos_grupo_por_clan,
             pendentes_por_clan=pendentes_por_clan,
-            pontos_por_coach=all_coach_points,
+            pontos_por_coach=totais_finais_coach,
             pendentes_por_coach=pendentes_por_coach,
-            totais_atualizados=all_points,
+            totais_atualizados=totais_finais_clan,
             mensagem=f"Reprocessamento completo: {'. '.join(partes)}.",
         )
 

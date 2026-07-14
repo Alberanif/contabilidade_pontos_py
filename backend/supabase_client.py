@@ -650,6 +650,80 @@ def add_delta_to_coach_total(coach: str, delta: int) -> dict:
     return upsert_coach_total(coach, new_total)
 
 
+def get_all_desafio_coach_names() -> set[str]:
+    """Retorna o conjunto de nomes distintos de coach em desafio_registros_coach."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIO_REGISTROS_COACH).select("coach").execute()
+    return {row["coach"] for row in result.data if row.get("coach")}
+
+
+def update_desafio_importacao_linhas_coach(old_coach: str, new_coach: str) -> int:
+    """Reescreve o campo coach de old_coach para new_coach em desafio_importacao_linhas.
+    Retorna a quantidade de linhas atualizadas."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_IMPORTACAO_LINHAS)
+        .update({"coach": new_coach})
+        .eq("coach", old_coach)
+        .execute()
+    )
+    return len(result.data)
+
+
+def get_desafio_coach_total(coach: str) -> int:
+    """Soma total_pontos de todos os registros de desafio de um coach (todos os desafios)."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS_COACH)
+        .select("total_pontos")
+        .eq("coach", coach)
+        .execute()
+    )
+    return sum(r["total_pontos"] for r in result.data)
+
+
+def _soma_valor_desafio(existente_valor, raw_valor):
+    total = int(existente_valor) + int(raw_valor)
+    return str(total) if isinstance(existente_valor, str) else total
+
+
+def merge_desafio_registros_coach(raw_coach: str, canonical: str) -> int:
+    """Funde os registros de desafio de raw_coach no canônico. Se o canônico já
+    tiver um registro no mesmo desafio (colisão de UNIQUE(desafio_id, coach)),
+    soma valores/total_pontos e apaga a linha antiga; senão, só renomeia o
+    coach da linha. Retorna a quantidade de linhas de raw_coach processadas."""
+    client = _get_client()
+    raw_rows = (
+        client.table(TABLE_DESAFIO_REGISTROS_COACH).select("*").eq("coach", raw_coach).execute().data
+    )
+    if not raw_rows:
+        return 0
+
+    canonical_rows = (
+        client.table(TABLE_DESAFIO_REGISTROS_COACH).select("*").eq("coach", canonical).execute().data
+    )
+    canonical_by_desafio = {r["desafio_id"]: r for r in canonical_rows}
+
+    for raw_row in raw_rows:
+        existente = canonical_by_desafio.get(raw_row["desafio_id"])
+        if existente:
+            valores_merged = {
+                campo_id: _soma_valor_desafio(valor, raw_row["valores"].get(campo_id, 0))
+                for campo_id, valor in existente["valores"].items()
+            }
+            novo_total = existente["total_pontos"] + raw_row["total_pontos"]
+            client.table(TABLE_DESAFIO_REGISTROS_COACH).update(
+                {"valores": valores_merged, "total_pontos": novo_total}
+            ).eq("id", existente["id"]).execute()
+            client.table(TABLE_DESAFIO_REGISTROS_COACH).delete().eq("id", raw_row["id"]).execute()
+        else:
+            client.table(TABLE_DESAFIO_REGISTROS_COACH).update(
+                {"coach": canonical}
+            ).eq("id", raw_row["id"]).execute()
+
+    return len(raw_rows)
+
+
 # --- Desafio Importação Linhas ---
 
 

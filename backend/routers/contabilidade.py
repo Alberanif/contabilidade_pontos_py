@@ -464,6 +464,7 @@ def reprocessar_coaches():
 
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
+        raw_coaches |= supabase_client.get_all_desafio_coach_names()
 
         registros_atualizados = 0
         coaches_afetados: set[str] = set()
@@ -471,6 +472,8 @@ def reprocessar_coaches():
             canonical = coach_identity.resolve_coach(raw_coach, alias_map)
             if canonical != raw_coach:
                 registros_atualizados += supabase_client.update_registros_coach(raw_coach, canonical)
+                supabase_client.update_desafio_importacao_linhas_coach(raw_coach, canonical)
+                supabase_client.merge_desafio_registros_coach(raw_coach, canonical)
                 coaches_afetados.add(canonical)
                 supabase_client.delete_coach_total(raw_coach)
 
@@ -501,8 +504,9 @@ def reprocessar_coaches():
             lotes = group_people // config.BATCH_SIZE_GROUP
             novo_carry = group_people % config.BATCH_SIZE_GROUP
             group_pts = lotes * config.POINTS_PER_BATCH_GROUP
+            desafio_pts = supabase_client.get_desafio_coach_total(canonical)
             total_pagante = ci_pts + group_pts
-            total_pontos = total_pagante + pb_pts
+            total_pontos = total_pagante + pb_pts + desafio_pts
             supabase_client.upsert_coach_total(
                 canonical, total_pontos,
                 pessoas_em_espera=novo_carry,

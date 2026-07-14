@@ -177,7 +177,7 @@ def editar_desafio(desafio_id: int, body: DesafioUpdate):
 
 @router.delete("/{desafio_id}")
 def excluir_desafio(desafio_id: int):
-    """Remove o desafio. Se contabilizar_pontos=true, desconta pontos dos clãs."""
+    """Remove o desafio. Se contabilizar_pontos=true, desconta pontos dos clãs e coaches."""
     desafio = supabase_client.get_desafio(desafio_id)
     if not desafio:
         raise HTTPException(status_code=404, detail="Desafio não encontrado")
@@ -187,6 +187,11 @@ def excluir_desafio(desafio_id: int):
         for reg in registros:
             if reg["total_pontos"] > 0:
                 supabase_client.add_delta_to_clan_total(reg["clan"], -reg["total_pontos"])
+
+        registros_coach = supabase_client.list_desafio_registros_coach(desafio_id)
+        for reg in registros_coach:
+            if reg["total_pontos"] > 0:
+                supabase_client.add_delta_to_coach_total(reg["coach"], -reg["total_pontos"])
 
     supabase_client.delete_desafio(desafio_id)
     return {"mensagem": f"Desafio '{desafio['nome']}' excluído com sucesso."}

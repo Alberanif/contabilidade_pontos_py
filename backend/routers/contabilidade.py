@@ -1141,6 +1141,7 @@ async def historico(inicio: str = Query(..., description="Data inicial no format
         clan_totals = supabase_client.get_period_clan_totals(inicio_date, fim_date)
         desafio_totals = supabase_client.get_period_desafio_totals(inicio_date, fim_date)
         coach_totals = supabase_client.get_period_coach_totals(inicio_date, fim_date)
+        desafio_coach_totals = supabase_client.get_period_desafio_coach_totals(inicio_date, fim_date)
 
         # Merge clan points + desafio points
         all_clans = set(clan_totals.keys()) | set(desafio_totals.keys())
@@ -1148,7 +1149,13 @@ async def historico(inicio: str = Query(..., description="Data inicial no format
         for clan in all_clans:
             merged_clans[clan] = clan_totals.get(clan, 0) + desafio_totals.get(clan, 0)
 
-        return HistoricoResponse(clans=merged_clans, coaches=coach_totals)
+        # Merge coach points + desafio points
+        all_coaches = set(coach_totals.keys()) | set(desafio_coach_totals.keys())
+        merged_coaches = {}
+        for coach in all_coaches:
+            merged_coaches[coach] = coach_totals.get(coach, 0) + desafio_coach_totals.get(coach, 0)
+
+        return HistoricoResponse(clans=merged_clans, coaches=merged_coaches)
     except HTTPException:
         raise
     except Exception as e:

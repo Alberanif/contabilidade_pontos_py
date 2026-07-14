@@ -9,6 +9,7 @@ TABLE_TOTAIS_COACH = "pontos_ultimate_totais_por_coach"
 TABLE_DESAFIOS = "desafios"
 TABLE_DESAFIO_CAMPOS = "desafio_campos"
 TABLE_DESAFIO_REGISTROS = "desafio_registros"
+TABLE_DESAFIO_REGISTROS_COACH = "desafio_registros_coach"
 TABLE_DESAFIO_IMPORTACAO_LINHAS = "desafio_importacao_linhas"
 TABLE_COACH_ALIASES = "pontos_ultimate_coach_aliases"
 
@@ -580,6 +581,73 @@ def update_desafio_registro_pontos(
         .execute()
     )
     return result.data[0]
+
+
+# --- Desafio Registros Coach ---
+
+
+def create_desafio_registro_coach(
+    desafio_id: int, coach: str, valores: dict, total_pontos: int
+) -> dict:
+    """Cria um registro de coach em um desafio."""
+    client = _get_client()
+    result = client.table(TABLE_DESAFIO_REGISTROS_COACH).insert(
+        {
+            "desafio_id": desafio_id,
+            "coach": coach,
+            "valores": valores,
+            "total_pontos": total_pontos,
+        }
+    ).execute()
+    return result.data[0]
+
+
+def list_desafio_registros_coach(desafio_id: int) -> list[dict]:
+    """Lista registros de coach de um desafio ordenados por data de criação."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS_COACH)
+        .select("*")
+        .eq("desafio_id", desafio_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return result.data
+
+
+def get_desafio_registro_coach_by_coach(desafio_id: int, coach: str) -> dict | None:
+    """Busca o registro de um coach específico em um desafio."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS_COACH)
+        .select("*")
+        .eq("desafio_id", desafio_id)
+        .eq("coach", coach)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def update_desafio_registro_coach_pontos(
+    registro_id: int, valores: dict, total_pontos: int
+) -> dict:
+    """Atualiza os valores e total_pontos de um registro de coach (usado no recálculo)."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_REGISTROS_COACH)
+        .update({"valores": valores, "total_pontos": total_pontos})
+        .eq("id", registro_id)
+        .execute()
+    )
+    return result.data[0]
+
+
+def add_delta_to_coach_total(coach: str, delta: int) -> dict:
+    """Soma delta (positivo ou negativo) ao total_pontos do coach. Mínimo 0."""
+    current_totals = get_coach_totals()
+    current = current_totals.get(coach, 0)
+    new_total = max(0, current + delta)
+    return upsert_coach_total(coach, new_total)
 
 
 # --- Desafio Importação Linhas ---

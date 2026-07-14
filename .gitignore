@@ -1,5 +1,6 @@
 .env
 .worktrees/
+.superpowers/
 *.pyc
 __pycache__/
 venv/

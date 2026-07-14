@@ -671,12 +671,24 @@ def update_desafio_importacao_linhas_coach(old_coach: str, new_coach: str) -> in
 
 
 def get_desafio_coach_total(coach: str) -> int:
-    """Soma total_pontos de todos os registros de desafio de um coach (todos os desafios)."""
+    """Soma total_pontos dos registros de desafio de um coach, restrito a
+    desafios com contabilizar_pontos=true (mesmo filtro de get_tipo_coach_totals)."""
     client = _get_client()
+    desafios = (
+        client.table(TABLE_DESAFIOS)
+        .select("id")
+        .eq("contabilizar_pontos", True)
+        .execute()
+        .data
+    )
+    desafio_ids = [d["id"] for d in desafios]
+    if not desafio_ids:
+        return 0
     result = (
         client.table(TABLE_DESAFIO_REGISTROS_COACH)
         .select("total_pontos")
         .eq("coach", coach)
+        .in_("desafio_id", desafio_ids)
         .execute()
     )
     return sum(r["total_pontos"] for r in result.data)

@@ -101,14 +101,34 @@ class TestUpdateDesafioImportacaoLinhasCoach:
 
 class TestGetDesafioCoachTotal:
 
-    def test_soma_total_pontos_de_todos_os_desafios_do_coach(self):
-        rows = [{"total_pontos": 10}, {"total_pontos": 15}]
-        with patch("supabase_client._get_client", return_value=_mock_client(rows)):
+    def _mock_sequential(self, desafios_rows, registros_rows):
+        result_desafios = MagicMock()
+        result_desafios.data = desafios_rows
+        chain_desafios = MagicMock()
+        chain_desafios.execute.return_value = result_desafios
+        for m in ("table", "select", "eq"):
+            getattr(chain_desafios, m).return_value = chain_desafios
+
+        result_registros = MagicMock()
+        result_registros.data = registros_rows
+        chain_registros = MagicMock()
+        chain_registros.execute.return_value = result_registros
+        for m in ("table", "select", "eq", "in_"):
+            getattr(chain_registros, m).return_value = chain_registros
+
+        client = MagicMock()
+        client.table.side_effect = [chain_desafios, chain_registros]
+        return client
+
+    def test_soma_total_pontos_apenas_de_desafios_contabilizaveis(self):
+        client = self._mock_sequential([{"id": 1}, {"id": 2}], [{"total_pontos": 10}, {"total_pontos": 15}])
+        with patch("supabase_client._get_client", return_value=client):
             result = supabase_client.get_desafio_coach_total("Vinicius Marini")
         assert result == 25
 
-    def test_sem_registros_retorna_zero(self):
-        with patch("supabase_client._get_client", return_value=_mock_client([])):
+    def test_sem_desafio_contabilizavel_retorna_zero(self):
+        client = self._mock_sequential([], [])
+        with patch("supabase_client._get_client", return_value=client):
             result = supabase_client.get_desafio_coach_total("Ninguem")
         assert result == 0
 

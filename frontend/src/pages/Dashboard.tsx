@@ -419,9 +419,7 @@ export default function Dashboard() {
       {activeTab === "coaches" && (
         <div className="mt-8">
           <h3 className="text-lg font-semibold text-gray-700 mb-3">Ranking de Coaches</h3>
-          {tipoFiltro === "desafios" ? (
-            <p className="text-gray-500 text-sm italic">Desafios não registram pontos por coach.</p>
-          ) : loading ? (
+          {loading ? (
             <p className="text-gray-500">Carregando coaches...</p>
           ) : (activeData ? Object.keys(activeData.coaches).length === 0 : coaches.length === 0) ? (
             <p className="text-gray-500">Nenhum dado disponível.</p>

@@ -34,6 +34,21 @@ MIGRATION_009 = (MIGRATIONS_DIR / "009_apply_desafio_reconciliation.sql").read_t
     encoding="utf-8"
 )
 
+# A função fixa `SET search_path = public, pg_temp` (hardening: quem chama não
+# consegue interpor objetos homônimos). Estes testes vivem em um schema
+# isolado, então o `search_path` embutido é reescrito para apontar para ele —
+# é a única adaptação, e falha alto se a cláusula sumir da migração.
+PINNED_SEARCH_PATH = "SET search_path = public, pg_temp"
+
+
+def _migration_009_for_schema(schema_name: str) -> str:
+    assert PINNED_SEARCH_PATH in MIGRATION_009, (
+        "a migração 009 precisa fixar search_path"
+    )
+    return MIGRATION_009.replace(
+        PINNED_SEARCH_PATH, f"SET search_path = {schema_name}, pg_temp"
+    )
+
 # Reproduz o estado legado real das tabelas tocadas pelo RPC. `desafios.data` é
 # NOT NULL sem default em produção (migração 2026-04-16), por isso aparece aqui.
 LEGACY_SCHEMA = """
@@ -116,31 +131,31 @@ def _payload(
     clan_deltas: dict | None = None,
     challenge_transitions: list[dict] | None = None,
     snapshot_hash: str = "hash-abc",
+    points_per_submission: int | None = 10,
 ) -> str:
     transitions = challenge_transitions or []
-    return json.dumps(
-        {
-            "snapshot_hash": snapshot_hash,
-            "sheet_row_count": 5,
-            "state_counts": {"new": len(token_versions or [])},
-            "clan_deltas": clan_deltas or {},
-            "points_per_submission": 10,
-            "mass_removal_required": False,
-            "mass_removal_confirmed": False,
-            "mass_removal_count": 0,
-            "challenges_created": sum(
-                1 for t in transitions if t["transition"] == "create"
-            ),
-            "challenges_archived": sum(
-                1 for t in transitions if t["transition"] == "archive"
-            ),
-            "challenges_reactivated": sum(
-                1 for t in transitions if t["transition"] == "reactivate"
-            ),
-            "challenge_transitions": transitions,
-            "token_versions": token_versions or [],
-        }
-    )
+    body = {
+        "snapshot_hash": snapshot_hash,
+        "sheet_row_count": 5,
+        "state_counts": {"new": len(token_versions or [])},
+        "clan_deltas": clan_deltas or {},
+        "points_per_submission": points_per_submission,
+        "mass_removal_required": False,
+        "mass_removal_confirmed": False,
+        "mass_removal_count": 0,
+        "challenges_created": sum(1 for t in transitions if t["transition"] == "create"),
+        "challenges_archived": sum(
+            1 for t in transitions if t["transition"] == "archive"
+        ),
+        "challenges_reactivated": sum(
+            1 for t in transitions if t["transition"] == "reactivate"
+        ),
+        "challenge_transitions": transitions,
+        "token_versions": token_versions or [],
+    }
+    if points_per_submission is None:
+        del body["points_per_submission"]
+    return json.dumps(body)
 
 
 def _apply(connection, payload: str) -> dict:
@@ -156,7 +171,7 @@ def _make_schema(connection, schema_name: str) -> None:
     )
     connection.execute(LEGACY_SCHEMA)
     connection.execute(MIGRATION_008)
-    connection.execute(MIGRATION_009)
+    connection.execute(_migration_009_for_schema(schema_name))
 
 
 @pytest.fixture
@@ -448,11 +463,85 @@ def test_total_negativo_aborta_e_preserva_estado_anterior(database):
 
 
 def test_total_negativo_nunca_e_truncado_para_zero(database):
-    with pytest.raises(psycopg.errors.RaiseException):
-        _apply(database, _payload(clan_deltas={"CLÃ 1": -1}))
+    with pytest.raises(
+        psycopg.errors.RaiseException,
+        match="desafio_reconciliation_negative_clan_total",
+    ):
+        _apply(
+            database,
+            _payload(
+                token_versions=[
+                    _token_version(point_delta=-1, clan_deltas={"CLÃ 1": -1})
+                ],
+                clan_deltas={"CLÃ 1": -1},
+            ),
+        )
     assert (
         database.execute(
             "SELECT COUNT(*) FROM pontos_ultimate_totais_por_clan"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_taxa_de_pontos_ausente_aborta_em_vez_de_assumir_um_padrao(database):
+    """Contrato violado precisa ser barulhento: a auditoria não pode chutar."""
+    with pytest.raises(
+        psycopg.errors.RaiseException,
+        match="desafio_reconciliation_missing_points_per_submission",
+    ):
+        _apply(database, _payload(points_per_submission=None))
+
+    assert (
+        database.execute("SELECT COUNT(*) FROM desafio_sync_runs").fetchone()[0] == 0
+    )
+
+
+def test_agregado_de_clas_divergente_da_soma_por_token_aborta(database):
+    """Um agregado corrompido moveria totais que nenhuma versão justifica."""
+    with pytest.raises(
+        psycopg.errors.RaiseException,
+        match="desafio_reconciliation_clan_delta_mismatch",
+    ):
+        _apply(
+            database,
+            _payload(
+                token_versions=[_token_version(clan_deltas={"CLÃ 1": 10})],
+                # O plano afirma o dobro do que os tokens somam.
+                clan_deltas={"CLÃ 1": 20},
+            ),
+        )
+
+    assert (
+        database.execute(
+            "SELECT COUNT(*) FROM pontos_ultimate_totais_por_clan"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_arquivamento_sem_desafio_correspondente_nao_e_reportado(database):
+    """Nada mudou: reportar 'arquivado' faria a auditoria afirmar um efeito falso."""
+    result = _apply(
+        database,
+        _payload(
+            challenge_transitions=[
+                {
+                    "challenge_normalized": "desafio inexistente",
+                    "challenge_display": None,
+                    "transition": "archive",
+                }
+            ]
+        ),
+    )
+
+    assert result["status"] == "applied"
+    assert result["challenge_transitions"] == []
+    assert result["challenges_archived"] == 0
+    assert (
+        database.execute(
+            "SELECT challenges_archived FROM desafio_sync_runs WHERE id = %s",
+            (result["run_id"],),
         ).fetchone()[0]
         == 0
     )

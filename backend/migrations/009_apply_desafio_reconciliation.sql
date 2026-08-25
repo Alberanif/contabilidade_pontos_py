@@ -13,6 +13,9 @@
 CREATE OR REPLACE FUNCTION apply_desafio_reconciliation(p_payload JSONB)
 RETURNS JSONB
 LANGUAGE plpgsql
+-- Resolução de nomes fixa: nenhum schema de quem chama pode interpor uma
+-- tabela ou função homônima entre esta função e os objetos que ela escreve.
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   -- Chave fixa do advisory lock da sincronização de desafios. Vale para o
@@ -22,6 +25,7 @@ DECLARE
   v_run_id         BIGINT;
   v_started_at     TIMESTAMPTZ;
   v_finished_at    TIMESTAMPTZ;
+  v_points_per_submission INTEGER;
 
   v_transition     JSONB;
   v_version        JSONB;
@@ -40,7 +44,13 @@ DECLARE
   v_current_total  INTEGER;
   v_new_total      INTEGER;
 
+  v_plan_deltas       JSONB;
+  v_token_deltas      JSONB;
+
   v_tokens_versioned  INTEGER := 0;
+  v_created           INTEGER := 0;
+  v_archived          INTEGER := 0;
+  v_reactivated       INTEGER := 0;
   v_transitions_out   JSONB := '[]'::JSONB;
   v_totals_after      JSONB := '{}'::JSONB;
 BEGIN
@@ -65,6 +75,16 @@ BEGIN
     );
   END IF;
 
+  -- A taxa de pontos vem do plano (que a calculou) e não tem default aqui de
+  -- propósito: um fallback silencioso faria `desafio_sync_runs` registrar uma
+  -- taxa diferente da que produziu os pontos gravados. Ausência é violação de
+  -- contrato de quem chama, e precisa ser barulhenta.
+  v_points_per_submission := (p_payload->>'points_per_submission')::INTEGER;
+  IF v_points_per_submission IS NULL THEN
+    RAISE EXCEPTION
+      'desafio_reconciliation_missing_points_per_submission: o plano precisa informar points_per_submission';
+  END IF;
+
   INSERT INTO desafio_sync_runs (
     status, snapshot_hash, sheet_row_count, state_counts, clan_deltas,
     challenges_created, challenges_archived, challenges_reactivated,
@@ -76,10 +96,11 @@ BEGIN
     COALESCE((p_payload->>'sheet_row_count')::INTEGER, 0),
     COALESCE(p_payload->'state_counts', '{}'::JSONB),
     COALESCE(p_payload->'clan_deltas', '{}'::JSONB),
-    COALESCE((p_payload->>'challenges_created')::INTEGER, 0),
-    COALESCE((p_payload->>'challenges_archived')::INTEGER, 0),
-    COALESCE((p_payload->>'challenges_reactivated')::INTEGER, 0),
-    COALESCE((p_payload->>'points_per_submission')::INTEGER, 10),
+    -- Contagens de ciclo de vida ficam zeradas aqui e são preenchidas no fim
+    -- com o que de fato aconteceu: a intenção declarada no plano não é fonte
+    -- de verdade para a auditoria do efeito.
+    0, 0, 0,
+    v_points_per_submission,
     COALESCE((p_payload->>'mass_removal_required')::BOOLEAN, FALSE),
     COALESCE((p_payload->>'mass_removal_confirmed')::BOOLEAN, FALSE),
     COALESCE((p_payload->>'mass_removal_count')::INTEGER, 0)
@@ -128,6 +149,12 @@ BEGIN
         RETURNING id INTO v_desafio_id;
       END IF;
 
+      IF v_transition->>'transition' = 'create' THEN
+        v_created := v_created + 1;
+      ELSE
+        v_reactivated := v_reactivated + 1;
+      END IF;
+
     ELSIF v_transition->>'transition' = 'archive' THEN
       UPDATE desafios
          SET status = 'arquivado',
@@ -136,6 +163,14 @@ BEGIN
        WHERE origem = 'google_sheets'
          AND nome_normalizado = v_transition->>'challenge_normalized'
       RETURNING id INTO v_desafio_id;
+
+      -- Nenhuma linha correspondente: nada foi arquivado. Reportar o contrário
+      -- faria a auditoria afirmar uma mudança que não existe.
+      IF v_desafio_id IS NULL THEN
+        CONTINUE;
+      END IF;
+
+      v_archived := v_archived + 1;
 
     ELSE
       RAISE EXCEPTION
@@ -179,14 +214,19 @@ BEGIN
     -- lido antes desta transação. Se esse estado mudou nesse intervalo (ou
     -- se o mesmo plano está sendo reaplicado), abortar em vez de contabilizar
     -- deltas em cima de uma base diferente da prevista.
+    --
+    -- A existência é testada por `v_existing.status IS NULL` (a coluna é NOT
+    -- NULL na 008, então só é nula quando o SELECT não achou linha) em vez de
+    -- por `FOUND`, que é global do bloco e pode ser sobrescrito por qualquer
+    -- comando intermediário que venha a ser inserido aqui no futuro.
     IF v_previous IS NULL THEN
-      IF FOUND THEN
+      IF v_existing.status IS NOT NULL THEN
         RAISE EXCEPTION
           'desafio_reconciliation_stale_plan: token % já existe mas o plano o tratava como novo',
           v_token;
       END IF;
     ELSE
-      IF NOT FOUND THEN
+      IF v_existing.status IS NULL THEN
         RAISE EXCEPTION
           'desafio_reconciliation_stale_plan: token % desapareceu do estado atual',
           v_token;
@@ -322,6 +362,37 @@ BEGIN
   END LOOP;
 
   -- ---------------------------------------------------------------------
+  -- Conferência contábil antes de mexer em qualquer total: o agregado
+  -- `clan_deltas` do plano precisa bater, clã a clã, com a soma dos deltas
+  -- por token que acabaram de ser gravados nesta mesma transação. Sem isso,
+  -- um agregado corrompido moveria totais que nenhuma versão justifica —
+  -- exatamente o tipo de desvio que só apareceria semanas depois.
+  -- ---------------------------------------------------------------------
+  SELECT COALESCE(JSONB_OBJECT_AGG(clan, total), '{}'::JSONB)
+    INTO v_token_deltas
+    FROM (
+      SELECT d.key AS clan, SUM(d.value::INTEGER) AS total
+        FROM desafio_submission_versions v
+        CROSS JOIN LATERAL JSONB_EACH_TEXT(
+          COALESCE(v.clan_deltas, '{}'::JSONB)
+        ) AS d
+       WHERE v.sync_run_id = v_run_id
+       GROUP BY d.key
+      HAVING SUM(d.value::INTEGER) <> 0
+    ) AS somado;
+
+  SELECT COALESCE(JSONB_OBJECT_AGG(key, value::INTEGER), '{}'::JSONB)
+    INTO v_plan_deltas
+    FROM JSONB_EACH_TEXT(COALESCE(p_payload->'clan_deltas', '{}'::JSONB))
+   WHERE value::INTEGER <> 0;
+
+  IF v_plan_deltas IS DISTINCT FROM v_token_deltas THEN
+    RAISE EXCEPTION
+      'desafio_reconciliation_clan_delta_mismatch: agregado do plano % difere da soma por token %',
+      v_plan_deltas, v_token_deltas;
+  END IF;
+
+  -- ---------------------------------------------------------------------
   -- Delta líquido por clã. Um total que ficaria negativo aborta a transação
   -- inteira: truncar para zero esconderia uma inconsistência contábil.
   -- ---------------------------------------------------------------------
@@ -350,9 +421,15 @@ BEGIN
     v_totals_after := v_totals_after || JSONB_BUILD_OBJECT(v_clan, v_new_total);
   END LOOP;
 
+  -- As contagens de ciclo de vida são regravadas com o que de fato aconteceu
+  -- (um `archive` sem linha correspondente não conta), para que a auditoria
+  -- descreva o efeito e não a intenção do plano.
   UPDATE desafio_sync_runs
      SET status = 'succeeded',
-         finished_at = NOW()
+         finished_at = NOW(),
+         challenges_created = v_created,
+         challenges_archived = v_archived,
+         challenges_reactivated = v_reactivated
    WHERE id = v_run_id
   RETURNING finished_at INTO v_finished_at;
 
@@ -365,10 +442,9 @@ BEGIN
     'clan_deltas', COALESCE(p_payload->'clan_deltas', '{}'::JSONB),
     'clan_totals_after', v_totals_after,
     'challenge_transitions', v_transitions_out,
-    'challenges_created', COALESCE((p_payload->>'challenges_created')::INTEGER, 0),
-    'challenges_archived', COALESCE((p_payload->>'challenges_archived')::INTEGER, 0),
-    'challenges_reactivated',
-      COALESCE((p_payload->>'challenges_reactivated')::INTEGER, 0),
+    'challenges_created', v_created,
+    'challenges_archived', v_archived,
+    'challenges_reactivated', v_reactivated,
     'tokens_versioned', v_tokens_versioned,
     'started_at', v_started_at,
     'finished_at', v_finished_at

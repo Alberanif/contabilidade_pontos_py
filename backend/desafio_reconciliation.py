@@ -77,6 +77,10 @@ class DesafioSnapshot:
     entries: dict[str, DesafioSnapshotEntry]
     blank_token_rows: tuple[ParsedDesafioRow, ...]
     snapshot_hash: str
+    # Taxa que produziu `entry.points`. Fica no snapshot para que ninguém
+    # precise informá-la de novo mais adiante: qualquer valor suprido em
+    # separado poderia divergir do que de fato gerou os pontos.
+    points_per_submission: int
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,9 @@ class ReconciliationPlan:
     mass_removal_required: bool
     mass_removal_ratio: float
     mass_removal_count: int
+    # Herdado do snapshot: é a taxa que efetivamente gerou os pontos deste
+    # plano e a única fonte de verdade para a auditoria da aplicação.
+    points_per_submission: int
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +194,7 @@ def build_desafio_snapshot(
         entries=entries,
         blank_token_rows=tuple(blank_token_rows),
         snapshot_hash=snapshot_hash,
+        points_per_submission=points_per_submission,
     )
 
 
@@ -521,4 +529,5 @@ def reconcile_desafios(
         mass_removal_required=mass_removal_required,
         mass_removal_ratio=mass_removal_ratio,
         mass_removal_count=mass_removal_count,
+        points_per_submission=snapshot.points_per_submission,
     )

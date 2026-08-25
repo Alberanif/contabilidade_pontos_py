@@ -15,7 +15,6 @@ fechando o ciclo ler → reconciliar → aplicar.
 from dataclasses import dataclass
 from datetime import datetime
 
-import config
 import supabase_client
 from desafio_reconciliation import (
     CurrentSubmission,
@@ -101,14 +100,23 @@ def apply_reconciliation(
     plan: ReconciliationPlan,
     *,
     confirmed_snapshot_hash: str | None = None,
-    points_per_submission: int | None = None,
+    confirm_mass_removal: bool = False,
 ) -> AppliedSyncResult:
     """Aplica o plano inteiro em uma única transação do banco.
 
-    `confirmed_snapshot_hash`, quando informado, precisa bater com o hash do
-    próprio plano: uma confirmação só vale para o snapshot que o operador viu.
-    Planos que a planilha esvaziaria (RF-18) ou que removem em massa sem
-    confirmação (RF-17) são recusados antes de qualquer escrita.
+    As duas confirmações são deliberadamente independentes, porque são dois
+    consentimentos diferentes:
+
+    - `confirmed_snapshot_hash` responde "é este mesmo o plano que eu revi?".
+      Quando informado, precisa bater com o hash do próprio plano; serve de
+      pré-condição de frescor/idempotência e **não** aprova nada além disso.
+    - `confirm_mass_removal` responde "eu aceito apagar esta fatia grande de
+      tokens ativos?" (RF-17). Só `True` explícito libera um plano com
+      `mass_removal_required`; um hash de snapshot, sozinho, nunca vale como
+      aprovação de remoção em massa.
+
+    Planos que a planilha esvaziaria (RF-18) também são recusados antes de
+    qualquer escrita.
 
     Levanta `NegativeClanTotalError` quando o delta deixaria algum clã com
     total negativo — nesse caso nada do plano é aplicado (RF-19); o total nunca
@@ -126,20 +134,15 @@ def apply_reconciliation(
             f"{plan.active_tokens_before} token(s) ativo(s): nenhuma alteração aplicada"
         )
 
-    if plan.mass_removal_required and confirmed_snapshot_hash is None:
+    if plan.mass_removal_required and confirm_mass_removal is not True:
         raise MassRemovalConfirmationRequiredError(
             f"{plan.mass_removal_count} token(s) ativo(s) sumiriam "
-            f"({plan.mass_removal_ratio:.0%}): confirmação explícita obrigatória"
+            f"({plan.mass_removal_ratio:.0%}): confirmação explícita obrigatória "
+            "(confirm_mass_removal=True)"
         )
 
     payload = _plan_payload(
-        plan,
-        points_per_submission=(
-            config.POINTS_PER_DESAFIO_SUBMISSION
-            if points_per_submission is None
-            else points_per_submission
-        ),
-        mass_removal_confirmed=confirmed_snapshot_hash is not None,
+        plan, mass_removal_confirmed=confirm_mass_removal is True
     )
 
     try:
@@ -157,12 +160,21 @@ def apply_reconciliation(
     return _result_from_rpc(data)
 
 
-def _plan_payload(
-    plan: ReconciliationPlan,
-    *,
-    points_per_submission: int,
-    mass_removal_confirmed: bool,
-) -> dict:
+def _plan_payload(plan: ReconciliationPlan, *, mass_removal_confirmed: bool) -> dict:
+    # A taxa vem do próprio plano (é a que gerou os pontos que estão sendo
+    # persistidos). Aceitar um valor por fora abriria espaço para o registro de
+    # auditoria mentir sobre a taxa que produziu os pontos.
+    points_per_submission = plan.points_per_submission
+    if (
+        isinstance(points_per_submission, bool)
+        or not isinstance(points_per_submission, int)
+        or points_per_submission <= 0
+    ):
+        raise DesafioReconciliationError(
+            "plano sem points_per_submission utilizável "
+            f"({points_per_submission!r}): a taxa precisa vir do snapshot"
+        )
+
     return {
         "snapshot_hash": plan.snapshot_hash,
         "sheet_row_count": plan.sheet_row_count,
@@ -209,7 +221,10 @@ def _token_version_payload(version: TokenVersion) -> dict:
         "clan_deltas": dict(version.clan_deltas),
         "challenge_normalized": version.challenge_normalized,
         "challenge_display": version.challenge_display,
-        "row_numbers": list(version.row_numbers),
+        # `row_numbers` não entra aqui de propósito: o SQL lê os números de
+        # linha de dentro do próprio `current_state` (`v_state->'row_numbers'`),
+        # que é a mesma origem usada para gravar `raw_cells`. Duplicá-los no
+        # topo criaria um segundo lugar para eles divergirem.
     }
 
 
@@ -221,8 +236,16 @@ def _result_from_rpc(data) -> AppliedSyncResult:
             f"resposta inesperada de {RPC_APPLY_DESAFIO_RECONCILIATION}: {data!r}"
         )
 
+    # Um módulo que informa se pontos se moveram nunca pode presumir sucesso:
+    # resposta sem status (ou com status desconhecido) é falha de contrato.
+    status = data.get("status")
+    if status not in (STATUS_APPLIED, STATUS_ALREADY_RUNNING):
+        raise DesafioReconciliationError(
+            f"status inesperado de {RPC_APPLY_DESAFIO_RECONCILIATION}: {status!r}"
+        )
+
     return AppliedSyncResult(
-        status=data.get("status", STATUS_APPLIED),
+        status=status,
         run_id=data.get("run_id"),
         snapshot_hash=data.get("snapshot_hash"),
         sheet_row_count=data.get("sheet_row_count") or 0,

@@ -11,8 +11,10 @@ import json
 import os
 import re
 import sys
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -35,8 +37,11 @@ from desafio_reconciliation import (
     CurrentSubmission,
     ReconciliationPlan,
     TokenVersion,
+    build_desafio_snapshot,
     compute_content_hash,
+    reconcile_desafios,
 )
+from desafio_sheet_parser import build_parsed_rows
 
 
 SAO_PAULO = ZoneInfo("America/Sao_Paulo")
@@ -101,6 +106,7 @@ def _plan(
     is_empty_snapshot: bool = False,
     mass_removal_required: bool = False,
     active_tokens_before: int = 0,
+    points_per_submission: int = 10,
 ) -> ReconciliationPlan:
     return ReconciliationPlan(
         snapshot_hash=snapshot_hash,
@@ -123,6 +129,7 @@ def _plan(
         mass_removal_required=mass_removal_required,
         mass_removal_ratio=0.5 if mass_removal_required else 0.0,
         mass_removal_count=3 if mass_removal_required else 0,
+        points_per_submission=points_per_submission,
     )
 
 
@@ -169,6 +176,29 @@ class TestGuards:
         mock_rpc.assert_not_called()
 
     def test_confirmacao_com_hash_igual_aplica(self):
+        plan = _plan((_token_version(),), clan_deltas={"CLÃ 1": 10})
+        with patch("supabase_client.call_rpc", return_value=_rpc_success()) as mock_rpc:
+            result = store.apply_reconciliation(
+                plan, confirmed_snapshot_hash="hash-abc"
+            )
+        assert result.status == store.STATUS_APPLIED
+        payload = mock_rpc.call_args.args[1]["p_payload"]
+        # Hash de snapshot é pré-condição de frescor, não aprovação de nada.
+        assert payload["mass_removal_confirmed"] is False
+
+    def test_hash_de_snapshot_sozinho_nao_aprova_remocao_em_massa(self):
+        """O hash prova qual plano é; não prova que o operador aceitou apagá-lo."""
+        plan = _plan(
+            (_token_version(change_reason="missing"),),
+            mass_removal_required=True,
+            active_tokens_before=6,
+        )
+        with patch("supabase_client.call_rpc") as mock_rpc:
+            with pytest.raises(store.MassRemovalConfirmationRequiredError):
+                store.apply_reconciliation(plan, confirmed_snapshot_hash="hash-abc")
+        mock_rpc.assert_not_called()
+
+    def test_remocao_em_massa_exige_confirmacao_explicita(self):
         plan = _plan(
             (_token_version(),),
             clan_deltas={"CLÃ 1": 10},
@@ -176,13 +206,25 @@ class TestGuards:
             active_tokens_before=6,
         )
         with patch("supabase_client.call_rpc", return_value=_rpc_success()) as mock_rpc:
-            result = store.apply_reconciliation(
-                plan, confirmed_snapshot_hash="hash-abc"
-            )
+            result = store.apply_reconciliation(plan, confirm_mass_removal=True)
         assert result.status == store.STATUS_APPLIED
         payload = mock_rpc.call_args.args[1]["p_payload"]
         assert payload["mass_removal_confirmed"] is True
         assert payload["mass_removal_required"] is True
+
+    def test_confirmacao_de_remocao_em_massa_independe_do_hash(self):
+        """As duas confirmações são ortogonais: uma não substitui a outra."""
+        plan = _plan(
+            (_token_version(),),
+            clan_deltas={"CLÃ 1": 10},
+            mass_removal_required=True,
+            active_tokens_before=6,
+        )
+        with patch("supabase_client.call_rpc", return_value=_rpc_success()) as mock_rpc:
+            store.apply_reconciliation(
+                plan, confirmed_snapshot_hash="hash-abc", confirm_mass_removal=True
+            )
+        assert mock_rpc.call_args.args[1]["p_payload"]["mass_removal_confirmed"] is True
 
     def test_planilha_vazia_com_tokens_ativos_e_bloqueada(self):
         plan = _plan(
@@ -228,15 +270,19 @@ class TestPayload:
         assert payload["clan_deltas"] == {"CLÃ 1": 10}
         assert payload["mass_removal_confirmed"] is False
 
-    def test_payload_usa_pontos_por_submissao_do_config_por_padrao(self):
-        import config
-
-        payload = self._payload_for(_plan())
-        assert payload["points_per_submission"] == config.POINTS_PER_DESAFIO_SUBMISSION
-
-    def test_payload_aceita_pontos_por_submissao_explicito(self):
-        payload = self._payload_for(_plan(), points_per_submission=25)
+    def test_payload_usa_a_taxa_carregada_pelo_proprio_plano(self):
+        """A taxa auditada tem que ser a mesma que gerou os pontos do plano."""
+        payload = self._payload_for(_plan(points_per_submission=25))
         assert payload["points_per_submission"] == 25
+
+    def test_taxa_ausente_no_plano_e_erro_e_nao_valor_padrao(self):
+        plan = _plan()
+        for invalid in (None, 0, -5, "10"):
+            broken = replace(plan, points_per_submission=invalid)
+            with patch("supabase_client.call_rpc") as mock_rpc:
+                with pytest.raises(store.DesafioReconciliationError):
+                    store.apply_reconciliation(broken)
+            mock_rpc.assert_not_called()
 
     def test_payload_de_token_inclui_content_hash_reproduzivel(self):
         version = _token_version()
@@ -248,10 +294,13 @@ class TestPayload:
         assert token_payload["previous_state"] is None
         assert token_payload["point_delta"] == 10
         assert token_payload["clan_deltas"] == {"CLÃ 1": 10}
-        assert token_payload["row_numbers"] == [2]
         assert token_payload["content_hash"] == compute_content_hash(
             "TOK-1", "active_counted", [RAW_CELLS]
         )
+        # Os números de linha vivem só dentro do estado, que é de onde o SQL
+        # os lê — não há uma segunda cópia no topo para divergir.
+        assert "row_numbers" not in token_payload
+        assert token_payload["current_state"]["row_numbers"] == [2]
 
     def test_payload_de_token_ausente_nao_tem_estado_atual_nem_hash(self):
         version = _token_version(
@@ -379,6 +428,21 @@ class TestAppliedSyncResult:
             with pytest.raises(store.DesafioReconciliationError):
                 store.apply_reconciliation(_plan())
 
+    def test_resposta_sem_status_nao_e_tratada_como_sucesso(self):
+        """Ausência de status é falha de contrato, nunca 'deve ter aplicado'."""
+        rpc_data = _rpc_success()
+        del rpc_data["status"]
+        with patch("supabase_client.call_rpc", return_value=rpc_data):
+            with pytest.raises(store.DesafioReconciliationError, match="status"):
+                store.apply_reconciliation(_plan())
+
+    def test_status_desconhecido_do_rpc_e_erro_de_dominio(self):
+        with patch(
+            "supabase_client.call_rpc", return_value=_rpc_success(status="whatever")
+        ):
+            with pytest.raises(store.DesafioReconciliationError, match="whatever"):
+                store.apply_reconciliation(_plan())
+
 
 # ---------------------------------------------------------------------------
 # Tradução de erros do banco
@@ -496,6 +560,214 @@ class TestGetCurrentDesafioSubmissions:
         ):
             assert store.get_current_desafio_submissions() == {}
 
+    def test_paginacao_nao_para_em_pagina_curta(self):
+        """Página curta pode ser limite do PostgREST, não fim da tabela.
+
+        Parar ali faria tokens existentes sumirem da base de comparação — e
+        cada um deles pontuaria de novo como se fosse novo.
+        """
+        import supabase_client
+
+        pages = [
+            [{"token": "TOK-1"}, {"token": "TOK-2"}],  # curta: db-max-rows
+            [{"token": "TOK-3"}],
+            [],
+        ]
+        ranges: list[tuple[int, int]] = []
+
+        class _Query:
+            def select(self, *_):
+                return self
+
+            def order(self, *_, **__):
+                return self
+
+            def range(self, start, end):
+                ranges.append((start, end))
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=pages[len(ranges) - 1])
+
+        client = SimpleNamespace(table=lambda *_: _Query())
+        with patch.object(supabase_client, "_get_client", return_value=client):
+            rows = supabase_client.fetch_all_desafio_submissions_current()
+
+        assert [row["token"] for row in rows] == ["TOK-1", "TOK-2", "TOK-3"]
+        # O offset avança pelo que veio, não pelo tamanho pedido.
+        assert [start for start, _ in ranges] == [0, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Contrato real Task 3 → store → SQL (sem banco)
+#
+# Os demais testes deste arquivo montam planos à mão, o que os torna cegos a
+# uma renomeação em `desafio_reconciliation._entry_state_dict`: as fixtures
+# foram escritas para casar com o SQL, não derivadas do motor. Estes testes
+# percorrem o pipeline de verdade (linhas cruas → parser → snapshot →
+# reconciliação → payload) e afirmam exatamente as chaves que a migração 009
+# lê, para que um rename na Task 3 quebre aqui e não em produção.
+# ---------------------------------------------------------------------------
+
+
+SHEET_ROWS = [
+    ["Clã", "Nome", "Validação", "Link", "Obs", "Desafio", "Clã atual", "Data", "Token"],
+    ["1", "Ana", "Sim", "http://e.test/a", "", "Desafio A", "", "19/08/2026 10:00:00", "TOK-1"],
+    ["2", "Bruno", "Sim", "http://e.test/b", "", "Desafio A", "", "19/08/2026 11:00:00", "TOK-2"],
+    ["3", "Carla", "Sim", "http://e.test/c", "", "Desafio B", "", "19/08/2026 12:00:00", "TOK-3"],
+    ["3", "Carla Souza", "Sim", "http://e.test/c", "", "Desafio B", "", "19/08/2026 12:00:00", "TOK-3"],
+]
+
+PIPELINE_POINTS = 10
+
+
+def _real_payload(sheet_rows, current=None, points=PIPELINE_POINTS) -> tuple:
+    snapshot = build_desafio_snapshot(build_parsed_rows(sheet_rows), points)
+    plan = reconcile_desafios(snapshot, current or {})
+    payload = store._plan_payload(plan, mass_removal_confirmed=False)
+    return snapshot, plan, payload
+
+
+def _persisted(entry, desafio_id=1) -> CurrentSubmission:
+    """O que a 009 grava em `desafio_submissions_current` para uma entrada."""
+    variant = entry.variant_rows[0]
+    return CurrentSubmission(
+        token=entry.token,
+        raw_clan_legacy=variant.raw_clan_legacy,
+        raw_name=variant.raw_name,
+        raw_validation=variant.raw_validation,
+        raw_link=variant.raw_link,
+        raw_observation=variant.raw_observation,
+        raw_challenge=variant.raw_challenge,
+        raw_clan_current=variant.raw_clan_current,
+        raw_submitted_at=variant.raw_submitted_at,
+        raw_token=variant.raw_token,
+        clan=entry.clan,
+        challenge_normalized=entry.challenge_normalized,
+        desafio_id=desafio_id,
+        submitted_at=entry.submitted_at,
+        status=entry.status,
+        points=entry.points,
+        content_hash=entry.content_hash,
+    )
+
+
+class TestRealPipelineContract:
+    def test_payload_do_pipeline_real_tem_as_chaves_que_o_sql_le(self):
+        snapshot, plan, payload = _real_payload(SHEET_ROWS)
+
+        assert payload["snapshot_hash"] == snapshot.snapshot_hash
+        assert payload["sheet_row_count"] == snapshot.sheet_row_count
+        # A taxa vem do plano, que a herdou do snapshot que gerou os pontos.
+        assert payload["points_per_submission"] == PIPELINE_POINTS
+        assert plan.points_per_submission == snapshot.points_per_submission
+
+        versions = {v["token"]: v for v in payload["token_versions"]}
+        assert set(versions) == {"TOK-1", "TOK-2", "TOK-3"}
+
+        for token, version in versions.items():
+            entry = snapshot.entries[token]
+            state = version["current_state"]
+
+            # `content_hash` NÃO é recalculado aqui: tem que ser o mesmo objeto
+            # de valor que o snapshot produziu, senão a próxima reconciliação
+            # veria toda linha como alterada.
+            assert version["content_hash"] == entry.content_hash
+
+            assert state["status"] == entry.status
+            assert state["variants"], "SQL lê variants->0 como raw_cells"
+            assert all(len(variant) == 9 for variant in state["variants"])
+            assert state["row_numbers"] == list(entry.row_numbers)
+            assert all(isinstance(number, int) for number in state["row_numbers"])
+            assert state["points"] == entry.points
+            assert state["clan"] == entry.clan
+            assert state["challenge_normalized"] == entry.challenge_normalized
+            # Precisa ser aceito por `(v_state->>'submitted_at')::TIMESTAMPTZ`.
+            if state["submitted_at"] is not None:
+                assert datetime.fromisoformat(state["submitted_at"])
+
+            assert version["change_reason"] == "new"
+            assert version["previous_state"] is None
+            assert version["current_status"] == entry.status
+
+        # Token duplicado conflitante: variantes preservadas e sem pontuar.
+        conflicted = versions["TOK-3"]["current_state"]
+        assert conflicted["status"] == "conflicted"
+        assert len(conflicted["variants"]) == 2
+        assert conflicted["points"] == 0
+        assert versions["TOK-3"]["clan_deltas"] == {}
+
+        for transition in payload["challenge_transitions"]:
+            assert set(transition) == {
+                "challenge_normalized",
+                "challenge_display",
+                "transition",
+            }
+            assert transition["transition"] in {"create", "archive", "reactivate"}
+
+        assert json.loads(json.dumps(payload)) == payload
+
+    def test_agregado_de_clas_bate_com_a_soma_por_token(self):
+        """É a invariante que a 009 confere dentro da transação."""
+        _, _, payload = _real_payload(SHEET_ROWS)
+
+        somado: dict[str, int] = {}
+        for version in payload["token_versions"]:
+            for clan, delta in version["clan_deltas"].items():
+                somado[clan] = somado.get(clan, 0) + delta
+
+        assert payload["clan_deltas"] == {
+            clan: delta for clan, delta in somado.items() if delta
+        }
+        assert payload["clan_deltas"] == {"CLÃ 1": 10, "CLÃ 2": 10}
+
+    def test_token_removido_no_pipeline_real_produz_estorno_sem_estado_atual(self):
+        snapshot, _, _ = _real_payload(SHEET_ROWS)
+        current = {
+            token: _persisted(entry) for token, entry in snapshot.entries.items()
+        }
+
+        remaining = [row for row in SHEET_ROWS if row[8] != "TOK-1"]
+        _, plan, payload = _real_payload(remaining, current)
+
+        versions = {v["token"]: v for v in payload["token_versions"]}
+        assert set(versions) == {"TOK-1"}
+        removed = versions["TOK-1"]
+
+        assert removed["change_reason"] == "missing"
+        assert removed["current_state"] is None
+        assert removed["content_hash"] is None
+        # As três chaves que a 009 compara para detectar plano obsoleto.
+        assert removed["previous_state"]["status"] == "active_counted"
+        assert removed["previous_state"]["clan"] == "CLÃ 1"
+        assert removed["previous_state"]["points"] == PIPELINE_POINTS
+        assert removed["clan_deltas"] == {"CLÃ 1": -PIPELINE_POINTS}
+        assert payload["clan_deltas"] == {"CLÃ 1": -PIPELINE_POINTS}
+        # Um token de 3 ativos some: a guarda de remoção em massa acorda.
+        assert plan.mass_removal_required is True
+
+    def test_remocao_em_massa_do_pipeline_real_e_recusada_sem_confirmacao(self):
+        snapshot, _, _ = _real_payload(SHEET_ROWS)
+        current = {
+            token: _persisted(entry) for token, entry in snapshot.entries.items()
+        }
+        remaining = [row for row in SHEET_ROWS if row[8] != "TOK-1"]
+        plan = reconcile_desafios(
+            build_desafio_snapshot(build_parsed_rows(remaining), PIPELINE_POINTS),
+            current,
+        )
+
+        with patch("supabase_client.call_rpc") as mock_rpc:
+            with pytest.raises(store.MassRemovalConfirmationRequiredError):
+                store.apply_reconciliation(
+                    plan, confirmed_snapshot_hash=plan.snapshot_hash
+                )
+        mock_rpc.assert_not_called()
+
+        with patch("supabase_client.call_rpc", return_value=_rpc_success()) as mock_rpc:
+            store.apply_reconciliation(plan, confirm_mass_removal=True)
+        assert mock_rpc.call_args.args[1]["p_payload"]["mass_removal_confirmed"] is True
+
 
 # ---------------------------------------------------------------------------
 # Contrato da migration 009
@@ -553,6 +825,41 @@ class TestMigrationSqlContract:
         assert "insert into desafio_submission_versions" in sql
         assert "insert into pontos_ultimate_totais_por_clan" in sql
         assert sql.count("create or replace function") == 1
+
+    def test_taxa_de_pontos_nao_tem_fallback_magico(self):
+        """Pega a volta do `COALESCE(..., 10)`, que faria a auditoria mentir."""
+        sql = self._sql()
+        assert "coalesce((p_payload->>'points_per_submission')" not in sql
+        assert "desafio_reconciliation_missing_points_per_submission" in sql
+        assert re.search(
+            r"if v_points_per_submission is null then\s+raise exception", sql
+        )
+
+    def test_agregado_de_clas_e_conferido_contra_a_soma_por_token(self):
+        """Pega a remoção da conferência que impede desvio contábil silencioso."""
+        sql = self._sql()
+        assert "desafio_reconciliation_clan_delta_mismatch" in sql
+        assert "v_plan_deltas is distinct from v_token_deltas" in sql
+
+    def test_funcao_fixa_o_search_path(self):
+        """Pega a volta de resolução de nome dependente de quem chama."""
+        assert re.search(
+            r"set search_path\s*=\s*[a-z_]+", self._sql()
+        ), "a função precisa fixar search_path"
+
+    def test_existencia_do_token_nao_depende_de_found(self):
+        """`FOUND` é global do bloco; `status` é NOT NULL e não mente."""
+        sql = self._sql()
+        assert "v_existing.status is null" in sql
+        assert "v_existing.status is not null" in sql
+        assert "if found then" not in sql
+        assert "if not found then" not in sql
+
+    def test_arquivamento_sem_linha_correspondente_nao_e_reportado(self):
+        """Pega o relato de um arquivamento que não aconteceu."""
+        sql = self._sql()
+        assert "v_archived := v_archived + 1" in sql
+        assert "'challenges_archived', v_archived" in sql
 
     def test_wrapper_usa_exatamente_o_rpc_da_migration(self):
         """Pega divergência entre o nome chamado no Python e o criado no SQL."""

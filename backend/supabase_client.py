@@ -437,12 +437,15 @@ def fetch_all_desafio_submissions_current() -> list[dict]:
             .range(offset, offset + page_size - 1)
             .execute()
         )
-        if not result.data:
+        rows = result.data or []
+        if not rows:
             break
-        all_rows.extend(result.data)
-        if len(result.data) < page_size:
-            break
-        offset += page_size
+        all_rows.extend(rows)
+        # Avança pelo que de fato veio, e nunca para só porque a página veio
+        # curta: o PostgREST pode limitar a resposta (`db-max-rows`) abaixo de
+        # `page_size`, e nesse caso uma página curta ainda tem continuação. Só
+        # uma página vazia prova o fim — o custo é uma requisição extra.
+        offset += len(rows)
     return all_rows
 
 

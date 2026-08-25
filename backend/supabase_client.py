@@ -1,7 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 from supabase import create_client, Client
 
 import config
+from desafio_sheet_parser import SAO_PAULO
 
 TABLE_REGISTROS = "pontos_ultimate_registros_contabilizados"
 TABLE_TOTAIS = "pontos_ultimate_totais_por_clan"
@@ -447,6 +448,62 @@ def fetch_all_desafio_submissions_current() -> list[dict]:
         # uma página vazia prova o fim — o custo é uma requisição extra.
         offset += len(rows)
     return all_rows
+
+
+def fetch_active_counted_desafio_submissions() -> list[dict]:
+    """Retorna todos os tokens com `status='active_counted'`, paginando até o fim.
+
+    Base de agregação dos totais de clã por tipo `desafios` (`get_period_desafio_totals`,
+    `get_tipo_clan_totals('desafios')`). Diferente de `list_desafio_submissions_current`
+    (auditoria paginada, `limit` padrão de 100), esta leitura nunca pode truncar
+    silenciosamente: um clã com mais de 100 tokens ativos seria subcontado.
+    Diferente de `fetch_all_desafio_submissions_current` (base completa da
+    reconciliação, sem filtro), o filtro `status='active_counted'` acontece no
+    servidor para não trazer linhas inválidas/conflitantes/inativas que nunca
+    entrariam na soma.
+    """
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+            .select("*")
+            .eq("status", "active_counted")
+            .order("token", desc=False)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            break
+        all_rows.extend(rows)
+        # Mesma lógica de `fetch_all_desafio_submissions_current`: avança pelo
+        # que de fato veio, nunca para só porque a página veio curta (o
+        # PostgREST pode limitar a resposta abaixo de `page_size`).
+        offset += len(rows)
+    return all_rows
+
+
+def _submitted_at_local_date(raw_value) -> date | None:
+    """Converte `submitted_at` (string ISO8601 com offset, ou `datetime`) para
+    a data de calendário em América/São_Paulo — a unidade de período usada por
+    `get_period_desafio_totals`."""
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, datetime):
+        parsed = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        if text.endswith(("Z", "z")):
+            text = f"{text[:-1]}+00:00"
+        parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SAO_PAULO)
+    return parsed.astimezone(SAO_PAULO).date()
 
 
 def get_desafio_submission_current(token: str) -> dict | None:
@@ -948,39 +1005,23 @@ def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
 
 def get_period_desafio_totals(inicio: date, fim: date) -> dict[str, int]:
     """
-    Sum desafio points for desafios within the period [inicio, fim].
-    Only includes desafios with contabilizar_pontos=true.
+    Sum desafio points per clan from active tokens (`status='active_counted'`
+    in `desafio_submissions_current`) whose `submitted_at`, converted to
+    América/São_Paulo local time and taken as a calendar date, falls within
+    [inicio, fim]. Period membership is per-token, not per-desafio: a
+    correction that moves a token's submitted_at, clan or validation moves or
+    removes its contribution the next time this runs.
     Returns dict[clan_name, total_pontos].
     """
-    client = _get_client()
-
-    # Fetch desafios in the period
-    desafios_query = (
-        client.table(TABLE_DESAFIOS)
-        .select("id")
-        .gte("data", inicio.isoformat())
-        .lte("data", fim.isoformat())
-        .eq("contabilizar_pontos", True)
-    )
-    desafios = desafios_query.execute().data
-    desafio_ids = [d["id"] for d in desafios]
-
-    if not desafio_ids:
-        return {}
-
-    # Fetch desafio_registros for those desafios
-    registros_query = (
-        client.table(TABLE_DESAFIO_REGISTROS)
-        .select("clan, total_pontos")
-        .in_("desafio_id", desafio_ids)
-    )
-    registros = registros_query.execute().data
-
-    totals = {}
-    for registro in registros:
-        clan = registro["clan"]
-        totals[clan] = totals.get(clan, 0) + registro["total_pontos"]
-
+    totals: dict[str, int] = {}
+    for row in fetch_active_counted_desafio_submissions():
+        clan = row.get("clan")
+        if not clan:
+            continue
+        local_date = _submitted_at_local_date(row.get("submitted_at"))
+        if local_date is None or not (inicio <= local_date <= fim):
+            continue
+        totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
     return totals
 
 
@@ -1030,26 +1071,17 @@ def get_tipo_clan_totals(
     if tipo == "desafios":
         if inicio and fim:
             return get_period_desafio_totals(inicio, fim)
-        desafios = (
-            client.table(TABLE_DESAFIOS)
-            .select("id")
-            .eq("contabilizar_pontos", True)
-            .execute()
-            .data
-        )
-        desafio_ids = [d["id"] for d in desafios]
-        if not desafio_ids:
-            return {}
-        registros = (
-            client.table(TABLE_DESAFIO_REGISTROS)
-            .select("clan, total_pontos")
-            .in_("desafio_id", desafio_ids)
-            .execute()
-            .data
-        )
+        # Sem filtro de data: soma todos os tokens ativos, sem olhar
+        # `submitted_at`. O status `active_counted` (computado pela
+        # reconciliação a partir da própria coluna "Sim" da planilha) é o
+        # único portão sobre se um token conta — não há mais um toggle
+        # `contabilizar_pontos` por desafio a preservar aqui.
         totals: dict[str, int] = {}
-        for r in registros:
-            totals[r["clan"]] = totals.get(r["clan"], 0) + r["total_pontos"]
+        for row in fetch_active_counted_desafio_submissions():
+            clan = row.get("clan")
+            if not clan:
+                continue
+            totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
         return totals
 
     # Without date filter: read breakdown columns from TABLE_TOTAIS

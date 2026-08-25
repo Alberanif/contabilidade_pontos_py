@@ -207,6 +207,49 @@ class TestGetTipoCoachTotalsFloor:
         assert result["Coach A"] == 10
 
 
+def _mock_active_counted_paged(rows):
+    """Mock paginado de `fetch_active_counted_desafio_submissions`: uma
+    página com `rows`, depois uma página vazia (fim da varredura)."""
+    calls = {"n": 0}
+    chain = MagicMock()
+    for m in ("table", "select", "eq", "order", "range"):
+        getattr(chain, m).return_value = chain
+
+    def _execute():
+        calls["n"] += 1
+        result = MagicMock()
+        result.data = rows if calls["n"] == 1 else []
+        return result
+
+    chain.execute.side_effect = _execute
+    client = MagicMock()
+    client.table.return_value = chain
+    return client
+
+
+class TestGetTipoClanTotalsDesafiosNaoAplicaFloor:
+    """Pontos de desafio (tokens `active_counted`) não passam pela lógica de
+    lote/floor de pagante/pro_bono: `points` de cada token entra somado como
+    veio, sem arredondar para baixo em múltiplos de `POINTS_PER_BATCH_GROUP`
+    (issue #19 / Task 8)."""
+
+    def test_pontos_de_desafio_nao_sao_agrupados_em_lotes(self):
+        # 6 pts é justamente o valor que, em pagante/pro_bono, o floor de lote
+        # zeraria por não completar um grupo — aqui não há floor: entra como 6.
+        rows = [
+            {
+                "clan": "CLÃ 1",
+                "points": 6,
+                "status": "active_counted",
+                "submitted_at": "2026-01-15T12:00:00+00:00",
+            },
+        ]
+        client = _mock_active_counted_paged(rows)
+        with patch("supabase_client._get_client", return_value=client):
+            result = supabase_client.get_tipo_clan_totals("desafios", INICIO, FIM)
+        assert result["CLÃ 1"] == 6
+
+
 def _mock_sequential_client(desafios_rows, registros_rows):
     result_desafios = MagicMock()
     result_desafios.data = desafios_rows

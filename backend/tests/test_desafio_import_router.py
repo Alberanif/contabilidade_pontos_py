@@ -3,30 +3,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from unittest.mock import patch
 
+import pytest
+from fastapi import HTTPException
+
 from routers.desafio_import import preview, confirmar
-
-MAPPING = {
-    "clan": "clã",
-    "nome": "nome",
-    "validado": "validado",
-    "submitted_at": "data",
-    "token": "token",
-}
-
-CSV_CONTENT = (
-    "clã,nome,validado,data,token\n"
-    "1,Ana Albertim,Sim,20/05/2026 10:00:00,T1\n"
-    "1,Vini Marini,Sim,21/05/2026 10:00:00,T2\n"
-).encode("utf-8")
-
-CSV_CONTENT_SINGLE = (
-    "clã,nome,validado,data,token\n"
-    "1,Ana Albertim,Sim,20/05/2026 10:00:00,T1\n"
-).encode("utf-8")
 
 
 class _FakeUploadFile:
-    def __init__(self, content: bytes):
+    def __init__(self, content: bytes = b""):
         self.file = io.BytesIO(content)
 
 
@@ -40,83 +24,48 @@ def _config(desafio_id=None):
     })
 
 
-class TestPreviewIncluiCoach:
+class TestPreviewBloqueado:
+    """A importação de CSV foi bloqueada (issue #17): a Google Sheet de desafios
+    é a única fonte de verdade. /preview não processa mais nada — nem chega a
+    tocar em google_sheets_client ou supabase_client."""
 
-    def test_preview_retorna_pontos_e_participacoes_por_coach(self):
-        with patch("google_sheets_client.fetch_ranking", return_value=[{"clan": "CLÃ 1"}]), \
-             patch("supabase_client.get_tokens_importados", return_value=set()), \
-             patch("supabase_client.get_coach_alias_map",
-                   return_value={"Vini Marini": "Vinicius Marini"}):
-            result = preview(
-                file=_FakeUploadFile(CSV_CONTENT),
-                mapping=json.dumps(MAPPING),
-                config=_config(),
-            )
-        assert result["pontos_por_coach"] == {"Ana Albertim": 10, "Vinicius Marini": 10}
-        assert result["participacoes_por_coach"] == {"Ana Albertim": 1, "Vinicius Marini": 1}
+    def test_preview_retorna_410_sem_processar_nada(self):
+        with patch("google_sheets_client.fetch_ranking") as mock_ranking, \
+             patch("supabase_client.get_tokens_importados") as mock_tokens, \
+             patch("supabase_client.get_coach_alias_map") as mock_alias:
+            with pytest.raises(HTTPException) as exc_info:
+                preview(
+                    file=_FakeUploadFile(),
+                    mapping=json.dumps({}),
+                    config=_config(),
+                )
+
+        assert exc_info.value.status_code == 410
+        mock_ranking.assert_not_called()
+        mock_tokens.assert_not_called()
+        mock_alias.assert_not_called()
 
 
-class TestConfirmarPersisteRegistrosDeCoach:
+class TestConfirmarBloqueado:
+    """A confirmação de importação de CSV foi bloqueada (issue #17): nenhum
+    registro de desafio ou de coach é mais criado/atualizado por este endpoint."""
 
-    def test_cria_registro_de_coach_novo_e_soma_delta(self):
-        desafio_criado = {"id": 42, "nome": "Desafio Teste", "origem": "csv_import"}
-        campos = [
-            {"id": 1, "nome": "Participações Validadas", "tipo": "texto", "ordem": 0},
-            {"id": 2, "nome": "Pontuação", "tipo": "pontuacao", "ordem": 1},
-        ]
-        with patch("google_sheets_client.fetch_ranking", return_value=[{"clan": "CLÃ 1"}]), \
-             patch("supabase_client.get_tokens_importados", return_value=set()), \
-             patch("supabase_client.get_coach_alias_map",
-                   return_value={"Vini Marini": "Vinicius Marini"}), \
-             patch("supabase_client.create_desafio", return_value=desafio_criado), \
-             patch("supabase_client.insert_desafio_campos", return_value=campos), \
-             patch("supabase_client.insert_desafio_importacao_linhas", return_value=[]), \
-             patch("supabase_client.get_desafio_registro_by_clan", return_value=None), \
-             patch("supabase_client.create_desafio_registro", return_value={}), \
-             patch("supabase_client.add_delta_to_clan_total", return_value={}), \
-             patch("supabase_client.get_desafio_registro_coach_by_coach", return_value=None), \
-             patch("supabase_client.create_desafio_registro_coach", return_value={}) as mock_create_coach, \
-             patch("supabase_client.add_delta_to_coach_total", return_value={}) as mock_delta_coach, \
-             patch("supabase_client.list_desafio_campos", return_value=campos), \
-             patch("supabase_client.list_desafio_registros", return_value=[]), \
-             patch("supabase_client.get_desafio", return_value=desafio_criado):
-            confirmar(
-                file=_FakeUploadFile(CSV_CONTENT),
-                mapping=json.dumps(MAPPING),
-                config=_config(),
-            )
+    def test_confirmar_retorna_410_sem_persistir_nada(self):
+        with patch("google_sheets_client.fetch_ranking") as mock_ranking, \
+             patch("supabase_client.create_desafio") as mock_create_desafio, \
+             patch("supabase_client.create_desafio_registro_coach") as mock_create_coach, \
+             patch("supabase_client.add_delta_to_coach_total") as mock_delta_coach, \
+             patch("supabase_client.add_delta_to_clan_total") as mock_delta_clan:
+            with pytest.raises(HTTPException) as exc_info:
+                confirmar(
+                    file=_FakeUploadFile(),
+                    mapping=json.dumps({}),
+                    config=_config(),
+                )
 
-        mock_create_coach.assert_any_call(42, "Ana Albertim", {"1": "1", "2": 10}, 10)
-        mock_create_coach.assert_any_call(42, "Vinicius Marini", {"1": "1", "2": 10}, 10)
-        mock_delta_coach.assert_any_call("Ana Albertim", 10)
-        mock_delta_coach.assert_any_call("Vinicius Marini", 10)
-
-    def test_atualiza_registro_de_coach_existente_e_aplica_delta(self):
-        desafio_existente = {"id": 42, "nome": "Desafio Teste", "origem": "csv_import"}
-        campos = [
-            {"id": 1, "nome": "Participações Validadas", "tipo": "texto", "ordem": 0},
-            {"id": 2, "nome": "Pontuação", "tipo": "pontuacao", "ordem": 1},
-        ]
-        existente_coach = {"id": 7, "coach": "Ana Albertim", "valores": {"1": "0", "2": 0}, "total_pontos": 0}
-        with patch("google_sheets_client.fetch_ranking", return_value=[{"clan": "CLÃ 1"}]), \
-             patch("supabase_client.get_tokens_importados", return_value=set()), \
-             patch("supabase_client.get_coach_alias_map", return_value={}), \
-             patch("supabase_client.get_desafio", return_value=desafio_existente), \
-             patch("supabase_client.update_desafio_periodo_e_pontos", return_value=None), \
-             patch("supabase_client.list_desafio_campos", return_value=campos), \
-             patch("supabase_client.insert_desafio_importacao_linhas", return_value=[]), \
-             patch("supabase_client.get_desafio_registro_by_clan", return_value=None), \
-             patch("supabase_client.create_desafio_registro", return_value={}), \
-             patch("supabase_client.add_delta_to_clan_total", return_value={}), \
-             patch("supabase_client.get_desafio_registro_coach_by_coach", return_value=existente_coach), \
-             patch("supabase_client.update_desafio_registro_coach_pontos", return_value={}) as mock_update_coach, \
-             patch("supabase_client.add_delta_to_coach_total", return_value={}) as mock_delta_coach, \
-             patch("supabase_client.list_desafio_registros", return_value=[]):
-            confirmar(
-                file=_FakeUploadFile(CSV_CONTENT_SINGLE),
-                mapping=json.dumps(MAPPING),
-                config=_config(desafio_id=42),
-            )
-
-        mock_update_coach.assert_any_call(7, {"1": "1", "2": 10}, 10)
-        mock_delta_coach.assert_any_call("Ana Albertim", 10)
+        assert exc_info.value.status_code == 410
+        mock_ranking.assert_not_called()
+        mock_create_desafio.assert_not_called()
+        mock_create_coach.assert_not_called()
+        mock_delta_coach.assert_not_called()
+        mock_delta_clan.assert_not_called()

@@ -472,7 +472,6 @@ def reprocessar_coaches():
 
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
-        raw_coaches |= supabase_client.get_all_desafio_coach_names()
 
         registros_atualizados = 0
         coaches_afetados: set[str] = set()
@@ -480,8 +479,6 @@ def reprocessar_coaches():
             canonical = coach_identity.resolve_coach(raw_coach, alias_map)
             if canonical != raw_coach:
                 registros_atualizados += supabase_client.update_registros_coach(raw_coach, canonical)
-                supabase_client.update_desafio_importacao_linhas_coach(raw_coach, canonical)
-                supabase_client.merge_desafio_registros_coach(raw_coach, canonical)
                 coaches_afetados.add(canonical)
                 supabase_client.delete_coach_total(raw_coach)
 
@@ -512,9 +509,8 @@ def reprocessar_coaches():
             lotes = group_people // config.BATCH_SIZE_GROUP
             novo_carry = group_people % config.BATCH_SIZE_GROUP
             group_pts = lotes * config.POINTS_PER_BATCH_GROUP
-            desafio_pts = supabase_client.get_desafio_coach_total(canonical)
             total_pagante = ci_pts + group_pts
-            total_pontos = total_pagante + pb_pts + desafio_pts
+            total_pontos = total_pagante + pb_pts
             supabase_client.upsert_coach_total(
                 canonical, total_pontos,
                 pessoas_em_espera=novo_carry,
@@ -778,7 +774,6 @@ def reprocessar_contabilidade():
                 all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
         desafio_totals_clan = supabase_client.get_tipo_clan_totals("desafios")
-        desafio_totals_coach = supabase_client.get_tipo_coach_totals("desafios")
 
         totais_finais_clan: dict[str, int] = {}
         all_clans_final = set(all_points.keys()) | set(desafio_totals_clan.keys())
@@ -792,9 +787,8 @@ def reprocessar_contabilidade():
             )
 
         totais_finais_coach: dict[str, int] = {}
-        all_coaches_final = set(all_coach_points.keys()) | set(desafio_totals_coach.keys())
-        for coach in all_coaches_final:
-            total = all_coach_points.get(coach, 0) + desafio_totals_coach.get(coach, 0)
+        for coach in all_coach_points.keys():
+            total = all_coach_points.get(coach, 0)
             totais_finais_coach[coach] = total
             supabase_client.upsert_coach_total(
                 coach, total,
@@ -1205,7 +1199,6 @@ async def historico(inicio: str = Query(..., description="Data inicial no format
         clan_totals = supabase_client.get_period_clan_totals(inicio_date, fim_date)
         desafio_totals = supabase_client.get_period_desafio_totals(inicio_date, fim_date)
         coach_totals = supabase_client.get_period_coach_totals(inicio_date, fim_date)
-        desafio_coach_totals = supabase_client.get_period_desafio_coach_totals(inicio_date, fim_date)
 
         # Merge clan points + desafio points
         all_clans = set(clan_totals.keys()) | set(desafio_totals.keys())
@@ -1213,11 +1206,9 @@ async def historico(inicio: str = Query(..., description="Data inicial no format
         for clan in all_clans:
             merged_clans[clan] = clan_totals.get(clan, 0) + desafio_totals.get(clan, 0)
 
-        # Merge coach points + desafio points
-        all_coaches = set(coach_totals.keys()) | set(desafio_coach_totals.keys())
-        merged_coaches = {}
-        for coach in all_coaches:
-            merged_coaches[coach] = coach_totals.get(coach, 0) + desafio_coach_totals.get(coach, 0)
+        # Pontos de coach: nenhuma fonte de desafio contribui (Global Constraint —
+        # ver issue #17). merged_coaches é apenas os totais pagante/pro-bono do coach.
+        merged_coaches = dict(coach_totals)
 
         return HistoricoResponse(clans=merged_clans, coaches=merged_coaches)
     except HTTPException:

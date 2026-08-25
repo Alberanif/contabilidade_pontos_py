@@ -371,6 +371,98 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     expect(await screen.findByTestId("sync-run-detail")).toBeInTheDocument();
   });
 
+  // --- Fix: dados obsoletos não devem persistir ao lado de um erro (task review) ---
+
+  it("clears stale version cards when switching from a token whose history loaded to one whose history fetch fails", async () => {
+    vi.mocked(fetchSubmissaoPorToken).mockReset().mockImplementation(async (token: string) =>
+      buildSubmissao({ token })
+    );
+    vi.mocked(fetchVersoesDaSubmissao)
+      .mockReset()
+      .mockResolvedValueOnce([buildVersao({ token: "tok-a", version_number: 2 })])
+      .mockRejectedValueOnce(new Error("Erro ao carregar histórico de versões"));
+
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await screen.findByText("Semana de Treinos");
+
+    const tokenInput = screen.getByLabelText(/token/i);
+
+    // Token A: history loads fine.
+    await user.type(tokenInput, "tok-a");
+    await user.click(screen.getByRole("button", { name: /buscar/i }));
+    await screen.findByTestId("submission-detail");
+    await user.click(screen.getByRole("button", { name: /hist[óo]rico de vers(õ|o)es/i }));
+    expect(await screen.findByText(/vers[ãa]o 2/i)).toBeInTheDocument();
+
+    // Token B: history fetch fails. Token A's version cards must not linger.
+    await user.clear(tokenInput);
+    await user.type(tokenInput, "tok-b");
+    await user.click(screen.getByRole("button", { name: /buscar/i }));
+    await screen.findByTestId("submission-detail");
+    await user.click(screen.getByRole("button", { name: /hist[óo]rico de vers(õ|o)es/i }));
+
+    expect(await screen.findByText(/erro ao carregar hist[óo]rico de vers[õo]es/i)).toBeInTheDocument();
+    expect(screen.queryByText(/vers[ãa]o 2/i)).not.toBeInTheDocument();
+  });
+
+  it("clears the stale submissions table when switching desafio and the new one's submissions fetch fails", async () => {
+    vi.mocked(fetchDesafiosAuditoria)
+      .mockReset()
+      .mockResolvedValue([buildDesafio(), buildDesafio({ id: 2, nome: "Outro Desafio" })]);
+    vi.mocked(fetchDesafioAuditoria)
+      .mockReset()
+      .mockImplementation(async (id: number) =>
+        buildDetalhe({ id, nome: id === 2 ? "Outro Desafio" : "Semana de Treinos" })
+      );
+    vi.mocked(fetchSubmissoesDoDesafio)
+      .mockReset()
+      .mockResolvedValueOnce([buildSubmissao({ token: "tok-desafio-1" })])
+      .mockRejectedValueOnce(new Error("Erro de rede ao buscar submissões"));
+
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await screen.findByText("Semana de Treinos");
+
+    await user.click(screen.getByText("Semana de Treinos"));
+    expect(await screen.findByText("tok-desafio-1")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "← Desafios" }));
+    await user.click(await screen.findByText("Outro Desafio"));
+
+    expect(await screen.findByText(/erro de rede ao buscar submiss(õ|o)es/i)).toBeInTheDocument();
+    expect(screen.queryByText("tok-desafio-1")).not.toBeInTheDocument();
+  });
+
+  // --- Fix: aviso de limite invisível de 100 submissões (task review) ---
+
+  it("shows a disclosure note when the submissions page comes back exactly at the 100-row limit", async () => {
+    const cem = Array.from({ length: 100 }, (_, i) => buildSubmissao({ token: `tok-${i}` }));
+    vi.mocked(fetchSubmissoesDoDesafio).mockReset().mockResolvedValue(cem);
+
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await user.click(await screen.findByText("Semana de Treinos"));
+
+    await waitFor(() =>
+      expect(fetchSubmissoesDoDesafio).toHaveBeenCalledWith(1, expect.objectContaining({ limit: 100 }))
+    );
+    expect(
+      await screen.findByText(/mostrando as primeiras 100 submiss(õ|o)es/i)
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the disclosure note when the submissions page has fewer than 100 rows", async () => {
+    vi.mocked(fetchSubmissoesDoDesafio).mockReset().mockResolvedValue([buildSubmissao()]);
+
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await user.click(await screen.findByText("Semana de Treinos"));
+
+    await screen.findByText("tok-abc123");
+    expect(screen.queryByText(/mostrando as primeiras 100 submiss(õ|o)es/i)).not.toBeInTheDocument();
+  });
+
   it("browses sync runs and drills into one run's detail", async () => {
     const user = userEvent.setup();
     render(<Desafios />);

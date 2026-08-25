@@ -44,6 +44,13 @@ const DESAFIO_STATUS_LABELS: Record<string, string> = {
   arquivado: "Arquivado",
 };
 
+// Limite explícito de submissões buscadas por página — casa com o default
+// implícito do backend (limit=100). Como não há controle de paginação nesta
+// tela (fora de escopo), quando a contagem retornada bate exatamente nesse
+// limite exibimos um aviso: pode haver mais linhas que a UI não está
+// mostrando, e o filtro de período client-side só enxerga esta página.
+const SUBMISSOES_LIMIT = 100;
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "-";
   const parts = dateStr.substring(0, 10).split("-");
@@ -203,9 +210,11 @@ export default function Desafios() {
     let cancelado = false;
     setLoadingSubmissoes(true);
     setErroSubmissoes("");
+    setSubmissoes([]);
     fetchSubmissoesDoDesafio(desafioDetalheId, {
       clan: filtros.clan || undefined,
       status: filtros.status || undefined,
+      limit: SUBMISSOES_LIMIT,
     })
       .then((data) => {
         if (!cancelado) setSubmissoes(data);
@@ -231,6 +240,7 @@ export default function Desafios() {
     let cancelado = false;
     setLoadingSubmissao(true);
     setErroSubmissao("");
+    setSubmissaoAtual(null);
     fetchSubmissaoPorToken(submissaoToken)
       .then((data) => {
         if (!cancelado) setSubmissaoAtual(data);
@@ -253,6 +263,7 @@ export default function Desafios() {
     let cancelado = false;
     setLoadingVersoes(true);
     setErroVersoes("");
+    setVersoes([]);
     fetchVersoesDaSubmissao(versoesToken)
       .then((data) => {
         if (!cancelado) setVersoes(data);
@@ -541,6 +552,13 @@ export default function Desafios() {
               <h4 className="text-sm font-semibold text-gray-700 mb-2">
                 Submissões ({submissoesFiltradas.length})
               </h4>
+
+              {submissoes.length === SUBMISSOES_LIMIT && (
+                <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs mb-2">
+                  Mostrando as primeiras {SUBMISSOES_LIMIT} submissões; o filtro de período se aplica apenas a esta
+                  página.
+                </p>
+              )}
 
               {erroSubmissoes && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-2">

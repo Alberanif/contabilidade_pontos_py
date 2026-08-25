@@ -30,6 +30,26 @@ def _hash_payload(payload: object) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def compute_content_hash(
+    token: str, status: str, variants: list[list[str]] | tuple
+) -> str:
+    """Hash canônico do conteúdo bruto de um token.
+
+    É a única definição do ``content_hash`` persistido em
+    ``desafio_submissions_current``: tanto o snapshot quanto a camada de
+    persistência derivam o valor daqui, para que a comparação
+    ``entry.content_hash != existing.content_hash`` seja confiável entre
+    execuções.
+    """
+    return _hash_payload(
+        {
+            "token": token,
+            "status": status,
+            "variants": [list(variant) for variant in variants],
+        }
+    )
+
+
 @dataclass(frozen=True)
 class DesafioSnapshotEntry:
     """Estado consolidado de um único token dentro de um snapshot."""
@@ -200,12 +220,8 @@ def _build_entry(
         reasons = ("duplicate_token_conflict",)
 
     points = points_per_submission if eligible else 0
-    content_hash = _hash_payload(
-        {
-            "token": token,
-            "status": status,
-            "variants": [list(row.raw_cells) for row in variant_rows],
-        }
+    content_hash = compute_content_hash(
+        token, status, [list(row.raw_cells) for row in variant_rows]
     )
 
     return DesafioSnapshotEntry(

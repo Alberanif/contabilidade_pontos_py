@@ -21,6 +21,15 @@ def _get_client() -> Client:
     return create_client(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY)
 
 
+def call_rpc(function_name: str, params: dict):
+    """Executa uma função do Postgres (RPC) e devolve o dado retornado.
+
+    Usado por operações que precisam acontecer em uma única transação do banco,
+    onde escritas separadas pelo cliente deixariam estado parcial observável.
+    """
+    return _get_client().rpc(function_name, params).execute().data
+
+
 # --- Registros contabilizados ---
 
 
@@ -406,6 +415,35 @@ def list_desafio_submissions_current(
         .execute()
     )
     return result.data
+
+
+def fetch_all_desafio_submissions_current() -> list[dict]:
+    """Retorna todas as linhas de estado atual, paginando até o fim.
+
+    Diferente de `list_desafio_submissions_current` (auditoria, com filtros e
+    página), esta leitura é a base completa da próxima reconciliação: nenhuma
+    linha pode faltar, sob pena de um token ser tratado como novo e pontuar
+    duas vezes.
+    """
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+            .select("*")
+            .order("token", desc=False)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        if not result.data:
+            break
+        all_rows.extend(result.data)
+        if len(result.data) < page_size:
+            break
+        offset += page_size
+    return all_rows
 
 
 def get_desafio_submission_current(token: str) -> dict | None:

@@ -12,6 +12,9 @@ TABLE_DESAFIO_REGISTROS = "desafio_registros"
 TABLE_DESAFIO_REGISTROS_COACH = "desafio_registros_coach"
 TABLE_DESAFIO_IMPORTACAO_LINHAS = "desafio_importacao_linhas"
 TABLE_COACH_ALIASES = "pontos_ultimate_coach_aliases"
+TABLE_DESAFIO_SYNC_RUNS = "desafio_sync_runs"
+TABLE_DESAFIO_SUBMISSIONS_CURRENT = "desafio_submissions_current"
+TABLE_DESAFIO_SUBMISSION_VERSIONS = "desafio_submission_versions"
 
 
 def _get_client() -> Client:
@@ -364,6 +367,70 @@ def get_coach_alias_map() -> dict[str, str]:
     client = _get_client()
     result = client.table(TABLE_COACH_ALIASES).select("alias, coach_canonico").execute()
     return {row["alias"]: row["coach_canonico"] for row in result.data}
+
+
+# --- Sincronização de desafios via Google Sheets (somente leitura) ---
+
+
+def list_desafio_sync_runs(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Lista execuções de sincronização, da mais recente para a mais antiga."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SYNC_RUNS)
+        .select("*")
+        .order("started_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return result.data
+
+
+def list_desafio_submissions_current(
+    desafio_id: int | None = None,
+    clan: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Lista o estado atual dos tokens com filtros de auditoria opcionais."""
+    query = _get_client().table(TABLE_DESAFIO_SUBMISSIONS_CURRENT).select("*")
+    if desafio_id is not None:
+        query = query.eq("desafio_id", desafio_id)
+    if clan is not None:
+        query = query.eq("clan", clan)
+    if status is not None:
+        query = query.eq("status", status)
+    result = (
+        query.order("submitted_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return result.data
+
+
+def get_desafio_submission_current(token: str) -> dict | None:
+    """Busca o estado atual de um token global sem alterar sua grafia."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+        .select("*")
+        .eq("token", token)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def list_desafio_submission_versions(token: str) -> list[dict]:
+    """Lista todas as versões imutáveis de um token em ordem cronológica."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SUBMISSION_VERSIONS)
+        .select("*")
+        .eq("token", token)
+        .order("version_number", desc=False)
+        .execute()
+    )
+    return result.data
 
 
 def insert_coach_alias(alias: str, coach_canonico: str) -> dict:

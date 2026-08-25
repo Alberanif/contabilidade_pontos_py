@@ -98,6 +98,31 @@ export function deleteRegistro(id: number): Promise<{ mensagem: string; novo_tot
 
 // --- Contabilidade ---
 
+// Resultado da sincronização de desafios (Google Sheets) executada como parte
+// de POST /api/contabilidade/executar. Espelha `DesafioSyncResult` em
+// backend/desafio_sync_service.py — os nomes/tipos dos campos devem
+// permanecer idênticos aos do Pydantic model.
+export interface DesafioSyncResult {
+  status: string; // "success" | "failed" | "awaiting_confirmation" | "already_running"
+  run_id: number | null;
+  snapshot_hash: string | null;
+  sheet_row_count: number;
+  state_counts: Record<string, number>;
+  clan_deltas: Record<string, number>;
+  clan_totals_after: Record<string, number>;
+  challenges_created: number;
+  challenges_archived: number;
+  challenges_reactivated: number;
+  tokens_versioned: number;
+  duration_seconds: number;
+  mensagem: string;
+  // Só relevantes quando status === "awaiting_confirmation".
+  active_tokens_before: number | null;
+  mass_removal_required: boolean;
+  mass_removal_count: number;
+  mass_removal_ratio: number;
+}
+
 export interface ExecutarResponse {
   novos_registros: number;
   novos_pendentes: number;
@@ -108,12 +133,18 @@ export interface ExecutarResponse {
   pontos_por_coach: Record<string, number>;
   pendentes_por_coach: Record<string, number>;
   totais_atualizados: Record<string, number>;
+  desafios: DesafioSyncResult;
   mensagem: string;
 }
 
-export interface ReprocessarResponse extends ExecutarResponse {
+// POST /api/contabilidade/reprocessar nunca chama a sincronização de
+// desafios (ver backend/routers/contabilidade.py::reprocessar_contabilidade),
+// então este tipo NÃO herda `desafios` de ExecutarResponse — herdar via
+// `extends` faria o TypeScript mentir que todo ReprocessarResponse também tem
+// esse campo.
+export type ReprocessarResponse = Omit<ExecutarResponse, "desafios"> & {
   registros_removidos: number;
-}
+};
 
 export interface AprovarClanResponse {
   clan: string;
@@ -169,6 +200,25 @@ export function executarContabilidade(): Promise<ExecutarResponse> {
 
 export function reprocessarContabilidade(): Promise<ReprocessarResponse> {
   return request("/api/contabilidade/reprocessar", { method: "POST" });
+}
+
+// Confirma (ou recusa) a aplicação de um plano de sincronização de desafios
+// que retornou status "awaiting_confirmation" por exigir remoção em massa
+// (RF-17). O backend só precisa do `snapshot_hash` da prévia — não existe
+// `run_id` de entrada; se a planilha/estado mudou nesse meio-tempo, o backend
+// rejeita o hash obsoleto e devolve um DesafioSyncResult "failed" refletindo
+// a realidade atual (nunca aplica o plano antigo por engano).
+export function confirmarDesafios(
+  snapshotHash: string,
+  confirmarRemocaoEmMassa: boolean
+): Promise<DesafioSyncResult> {
+  return request("/api/contabilidade/confirmar-desafios", {
+    method: "POST",
+    body: JSON.stringify({
+      snapshot_hash: snapshotHash,
+      confirmar_remocao_em_massa: confirmarRemocaoEmMassa,
+    }),
+  });
 }
 
 export interface ImportarInicialResponse {

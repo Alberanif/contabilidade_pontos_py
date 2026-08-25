@@ -7,6 +7,8 @@ import google_sheets_client
 import supabase_client
 import points_engine
 import coach_identity
+import desafio_sync_service
+from desafio_sync_service import DesafioSyncResult
 
 router = APIRouter()
 
@@ -214,7 +216,13 @@ class ExecutarResponse(BaseModel):
     pontos_por_coach: dict[str, int]
     pendentes_por_coach: dict[str, int]
     totais_atualizados: dict[str, int]
+    desafios: DesafioSyncResult
     mensagem: str
+
+
+class ConfirmarDesafiosRequest(BaseModel):
+    snapshot_hash: str
+    confirmar_remocao_em_massa: bool = False
 
 
 class ReprocessarResponse(BaseModel):
@@ -532,8 +540,26 @@ def reprocessar_coaches():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _sync_desafios_isolado() -> DesafioSyncResult:
+    """Sincroniza desafios isolado do restante do `/executar`.
+
+    Chamado uma única vez, antes de tocar nas demais fontes: assim, uma
+    falha nas demais fontes (tratada pelo try/except externo) nunca encontra
+    a sincronização de desafios parcialmente executada, e uma falha aqui
+    nunca invalida o que as demais fontes já processaram na mesma resposta.
+    `desafio_sync_service.sync_desafios` já não deveria lançar exceções (ela
+    mesma traduz qualquer falha em `DesafioSyncResult(status="failed", ...)`),
+    mas este `try/except` é a garantia final de isolamento.
+    """
+    try:
+        return desafio_sync_service.sync_desafios()
+    except Exception as e:  # noqa: BLE001 - isolamento final da fonte "desafios"
+        return DesafioSyncResult(status="failed", mensagem=str(e))
+
+
 @router.post("/executar", response_model=ExecutarResponse)
 def executar_contabilidade():
+    desafios_result = _sync_desafios_isolado()
     try:
         rows = google_sheets_client.fetch_records()
         if not rows:
@@ -542,6 +568,7 @@ def executar_contabilidade():
                 pontos_por_clan={}, pontos_grupo_por_clan={},
                 pendentes_por_clan={}, pontos_por_coach={}, pendentes_por_coach={},
                 totais_atualizados={},
+                desafios=desafios_result,
                 mensagem="Nenhum dado encontrado na planilha de registros.",
             )
 
@@ -649,9 +676,31 @@ def executar_contabilidade():
             pontos_por_coach=all_coach_points,
             pendentes_por_coach=pendentes_por_coach,
             totais_atualizados=totais_atualizados,
+            desafios=desafios_result,
             mensagem=". ".join(partes) + ".",
         )
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/confirmar-desafios", response_model=DesafioSyncResult)
+def confirmar_desafios(body: ConfirmarDesafiosRequest):
+    """Confirma e aplica um plano de sincronização de desafios pendente.
+
+    Nunca aceita um plano ou deltas vindos do cliente: o cliente só informa o
+    `snapshot_hash` que lhe foi mostrado na prévia (via `desafios.snapshot_hash`
+    de `/executar`, quando `status == "awaiting_confirmation"`) e se aceita a
+    remoção em massa. O plano de fato é sempre recalculado aqui a partir da
+    planilha e do estado persistido atuais — se algum dos dois mudou desde a
+    prévia, `apply_reconciliation` recusa a aplicação (o hash não bate mais)
+    e uma nova prévia precisa ser solicitada.
+    """
+    try:
+        return desafio_sync_service.sync_desafios(
+            confirm_snapshot_hash=body.snapshot_hash,
+            confirm_mass_removal=body.confirmar_remocao_em_massa,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

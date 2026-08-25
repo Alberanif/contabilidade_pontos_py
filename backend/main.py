@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -36,18 +36,13 @@ app.include_router(coaches.router, prefix="/api/coaches", tags=["Coaches"])
 
 # `desafios.router` (5 escritas bloqueadas com HTTP 410 — issue #17) e
 # `desafio_auditoria.router` (7 leituras de auditoria — issue #18) são dois
-# APIRouters mantidos em arquivos separados por responsabilidade, mas
-# combinados aqui num único router para que exista exatamente um ponto de
-# montagem no prefixo "/api/desafios" — dois `include_router` distintos nesse
-# mesmo prefixo fariam um deles esconder rotas do outro silenciosamente.
-# `.routes.extend(...)` (em vez de `.include_router(...)`, que exige um
-# prefixo não-vazio sempre que a sub-rota tem path "") é o jeito direto de
-# juntar as duas listas de rotas antes do único `app.include_router` abaixo,
-# que aplica o prefixo real.
-desafios_router = APIRouter()
-desafios_router.routes.extend(desafios.router.routes)
-desafios_router.routes.extend(desafio_auditoria.router.routes)
-app.include_router(desafios_router, prefix="/api/desafios", tags=["Desafios"])
+# APIRouters mantidos em arquivos separados por responsabilidade, montados
+# aqui no mesmo prefixo "/api/desafios" via duas chamadas a `include_router`.
+# Isso é seguro porque não há colisão de (método, path) entre eles: todas as
+# rotas de `desafios.router` são POST/PUT/DELETE e todas as de
+# `desafio_auditoria.router` são GET.
+app.include_router(desafios.router, prefix="/api/desafios", tags=["Desafios"])
+app.include_router(desafio_auditoria.router, prefix="/api/desafios", tags=["Desafios"])
 app.include_router(desafio_import.router, prefix="/api/desafios/importar", tags=["Desafios"])
 
 

@@ -474,6 +474,18 @@ def list_desafio_submission_versions(token: str) -> list[dict]:
     return result.data
 
 
+def get_desafio_sync_run(run_id: int) -> dict | None:
+    """Busca uma única execução de sincronização pelo ID."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SYNC_RUNS)
+        .select("*")
+        .eq("id", run_id)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
 def insert_coach_alias(alias: str, coach_canonico: str) -> dict:
     """Cadastra (ou atualiza) um alias de coach."""
     client = _get_client()
@@ -535,12 +547,17 @@ def update_desafio_periodo_e_pontos(
     return result.data[0]
 
 
-def list_desafios(origem: str | None = None) -> list[dict]:
-    """Lista desafios, opcionalmente filtrando por origem ('manual' | 'csv_import')."""
+def list_desafios(origem: str | None = None, status: str | None = None) -> list[dict]:
+    """Lista desafios, opcionalmente filtrando por origem ('manual' | 'csv_import' |
+    'google_sheets') e/ou status. `status` aqui já deve ser o valor em português
+    usado no banco ('ativo' | 'arquivado') — o mapeamento do parâmetro em inglês
+    da API (`active`/`archived`/`all`) é responsabilidade do chamador."""
     client = _get_client()
     query = client.table(TABLE_DESAFIOS).select("*").order("created_at", desc=False)
     if origem is not None:
         query = query.eq("origem", origem)
+    if status is not None:
+        query = query.eq("status", status)
     return query.execute().data
 
 
@@ -549,6 +566,28 @@ def get_desafio(desafio_id: int) -> dict | None:
     client = _get_client()
     result = client.table(TABLE_DESAFIOS).select("*").eq("id", desafio_id).execute()
     return result.data[0] if result.data else None
+
+
+def get_desafio_clan_totals(desafio_id: int) -> dict[str, int]:
+    """Soma os pontos das submissões contabilizadas (`active_counted`) de um
+    desafio, agrupados por clã. A tabela fica restrita às submissões de um
+    único desafio, então somar em Python é suficiente e mais simples do que uma
+    função RPC dedicada só para este agrupamento."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+        .select("clan, points")
+        .eq("desafio_id", desafio_id)
+        .eq("status", "active_counted")
+        .execute()
+    )
+    totals: dict[str, int] = {}
+    for row in result.data:
+        clan = row.get("clan")
+        if not clan:
+            continue
+        totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
+    return totals
 
 
 def update_desafio(

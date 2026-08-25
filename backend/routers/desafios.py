@@ -1,9 +1,13 @@
+"""Handlers de escrita legados de desafios — todos bloqueados (issue #17).
+
+Os handlers de leitura que viviam aqui (`listar_desafios`, `listar_registros`)
+foram retirados: a API de auditoria somente-leitura em
+`routers/desafio_auditoria.py` os substitui por completo (issue #18)."""
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Any
 from datetime import date
-
-import supabase_client
 
 router = APIRouter()
 
@@ -46,27 +50,6 @@ class RegistroCreate(BaseModel):
     valores: dict[str, Any]
 
 
-@router.get("")
-def listar_desafios():
-    """Lista todos os desafios com seus campos e contagem de registros."""
-    desafios = supabase_client.list_desafios()
-    all_campos = supabase_client.list_all_desafio_campos()
-    registro_counts = supabase_client.count_desafio_registros_by_desafio()
-
-    campos_by_desafio: dict[int, list[dict]] = {}
-    for c in all_campos:
-        campos_by_desafio.setdefault(c["desafio_id"], []).append(c)
-
-    return [
-        {
-            **d,
-            "campos": campos_by_desafio.get(d["id"], []),
-            "total_registros": registro_counts.get(d["id"], 0),
-        }
-        for d in desafios
-    ]
-
-
 @router.post("")
 def criar_desafio(body: DesafioCreate):
     """Bloqueado (issue #17): a Google Sheet de desafios é a única fonte de
@@ -86,15 +69,6 @@ def excluir_desafio(desafio_id: int):
     """Bloqueado (issue #17): a Google Sheet de desafios é a única fonte de
     verdade. Exclusão manual de desafios não é mais aceita."""
     _bloquear_escrita_legada()
-
-
-@router.get("/{desafio_id}/registros")
-def listar_registros(desafio_id: int):
-    """Lista os registros de clãs de um desafio."""
-    desafio = supabase_client.get_desafio(desafio_id)
-    if not desafio:
-        raise HTTPException(status_code=404, detail="Desafio não encontrado")
-    return supabase_client.list_desafio_registros(desafio_id)
 
 
 @router.post("/{desafio_id}/registros")

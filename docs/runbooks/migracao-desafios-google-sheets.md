@@ -82,6 +82,7 @@ aqui mesmo, neste arquivo, no commit correspondente.
 | 8 | Backup da cópia tem checksum recomputável | consulta da seção 8 | checksum | |
 | 9 | Restauração é recusada depois de uma sincronização bem-sucedida, inclusive com `p_force` | `SELECT restore_desafio_legacy_migracao(<id>, TRUE);` **deve falhar** | mensagem de erro | |
 | 10 | Roteiro manual da seção 7.4 ensaiado na cópia | seção 7.4, do `BEGIN` ao `COMMIT` | saída do passo 8 | |
+| 11 | Roteiro da 7.4 ensaiado **com uma sincronização anterior à Fase 1** | na cópia, rodar um sync bem-sucedido, depois `--apply`, depois a 7.4 | passo 8 vazio e totais iguais a `clan_before − planilha_antes_da_fase_1` | |
 
 Enquanto qualquer linha desta tabela estiver vazia, **não execute `--apply` em
 produção**.
@@ -332,73 +333,130 @@ Se qualquer conferência abaixo devolver linha onde o texto diz "deve ser
 vazio", execute `ROLLBACK;` e pare. Substitua `<id>` pelo `<migracao_id>` em
 todas as consultas.
 
+As duas tabelas temporárias criadas no roteiro (`rev_planilha_por_clan`, no
+passo 2, e `rev_neutralizados`, no passo 5) são `ON COMMIT DROP`: somem no
+`COMMIT` **e** no `ROLLBACK`. Elas existem para uma coisa só — amarrar, no
+passo 8, o que o passo 3 subtraiu ao que o passo 5 de fato zerou.
+
 #### 7.4.3 Passo 1 — quais execuções serão desfeitas
 
 ```sql
-SELECT r.id, r.started_at, r.finished_at, r.snapshot_hash, r.clan_deltas
+SELECT r.id, r.started_at, r.finished_at, r.snapshot_hash, r.clan_deltas,
+       r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
+         AS posterior_a_migracao
   FROM desafio_sync_runs r
  WHERE r.status = 'succeeded'
-   AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
  ORDER BY r.started_at;
 ```
 
 Cole o resultado no registro do incidente. **Todas** essas execuções serão
-revertidas — não só a Fase 2. Não existe reversão parcial suportada: se alguma
-delas não deveria ser desfeita, `ROLLBACK;` e reavalie.
+revertidas — não só a Fase 2, e não só as posteriores à migração. Este roteiro
+desliga o pipeline da planilha por inteiro: o passo 5 neutraliza **todo** token,
+independentemente de qual execução o viu primeiro.
 
-#### 7.4.4 Passo 2 — quanto a planilha somou, por clã (duas fontes independentes)
+Uma execução com `posterior_a_migracao = false` é possível e não é anomalia:
+a migração `009` é aplicada em produção antes de a CLI rodar (§4.1) e
+`Executar Contabilidade` sincroniza desafios em toda execução, então pode haver
+sincronização bem-sucedida **anterior** à Fase 1. A coluna é informativa aqui;
+ela volta a importar no passo 4, onde o retrato `clan_before` já contém essa
+contribuição.
+
+Não existe reversão parcial suportada: se alguma dessas execuções não deveria
+ser desfeita, `ROLLBACK;` e reavalie.
+
+#### 7.4.4 Passo 2 — quanto a planilha tem hoje nos totais de clã
+
+A fonte de verdade da subtração é **o estado atual por token**, não o log de
+execuções. Motivo: o passo 5 zera todo token que não esteja já em
+`inactive_missing`, sem filtro de data. Subtrair um recorte menor que esse (por
+exemplo, só as execuções posteriores à migração) deixaria nos totais de clã a
+contribuição das execuções anteriores, com a fatia "Desafios" marcando zero —
+exatamente a divergência silenciosa que este roteiro existe para evitar.
+
+Primeiro a invariante que torna essa fonte utilizável. **Deve vir vazia:**
 
 ```sql
--- (a) agregado registrado por execução
-SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos_planilha
-  FROM desafio_sync_runs r
-  CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
- WHERE r.status = 'succeeded'
-   AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
- GROUP BY d.key HAVING SUM(d.value::INTEGER) <> 0
- ORDER BY d.key;
-
--- (b) o mesmo número reconstruído da trilha imutável por token
-SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos_planilha
-  FROM desafio_submission_versions v
-  JOIN desafio_sync_runs r ON r.id = v.sync_run_id
-  CROSS JOIN LATERAL JSONB_EACH_TEXT(v.clan_deltas) AS d
- WHERE r.status = 'succeeded'
-   AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
- GROUP BY d.key HAVING SUM(d.value::INTEGER) <> 0
- ORDER BY d.key;
+-- No pipeline da planilha, `points > 0` só existe em `active_counted`, e um
+-- `active_counted` sempre tem clã (o parser marca `invalid`/`conflicted` quando
+-- não consegue resolver o clã, e `points = 0` para tudo que não é elegível).
+-- Se algo aparecer aqui, o passo 3 subtrairia menos do que o passo 5 zera:
+-- `ROLLBACK;` e investigue antes de qualquer escrita.
+SELECT token, status, clan, points
+  FROM desafio_submissions_current
+ WHERE (points <> 0 AND status <> 'active_counted')
+    OR (status = 'active_counted' AND clan IS NULL)
+ ORDER BY token;
 ```
 
-(a) e (b) **têm de ser idênticos** — a migração `009` recusa aplicar um plano em
-que eles divergem, então divergência aqui significa escrita fora do pipeline.
-Se divergirem: `ROLLBACK;` e investigue antes de qualquer coisa.
-
-Terceira conferência, válida quando **não havia nenhum token antes da Fase 1**
-(o caso de uma migração inicial): o que está ativo hoje tem de bater com (a).
+Agora materialize a fonte, dentro da mesma transação:
 
 ```sql
-SELECT clan, SUM(points) AS ativos_hoje
+CREATE TEMP TABLE rev_planilha_por_clan ON COMMIT DROP AS
+SELECT clan, SUM(points)::INTEGER AS pontos
   FROM desafio_submissions_current
  WHERE status = 'active_counted'
- GROUP BY clan ORDER BY clan;
+ GROUP BY clan;
+
+SELECT clan, pontos FROM rev_planilha_por_clan ORDER BY clan;
 ```
+
+Cole esse resultado no registro do incidente — é o número que o passo 3 vai
+subtrair.
+
+Duas reconstruções independentes têm de chegar ao mesmo número, clã a clã, e
+elas somam **todas** as execuções `succeeded` (sem filtro de data), que é
+exatamente o escopo da tabela acima. A identidade vale por construção: cada
+execução registra `-pontos` no clã antigo e `+pontos` no novo, de modo que a
+soma de todas as execuções telescopa nos pontos que cada token carrega hoje.
+
+```sql
+-- as três fontes têm de fechar; esta consulta deve vir VAZIA
+WITH por_execucao AS (
+  SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos
+    FROM desafio_sync_runs r
+    CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
+   WHERE r.status = 'succeeded'
+   GROUP BY d.key
+), por_token AS (
+  SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos
+    FROM desafio_submission_versions v
+    JOIN desafio_sync_runs r ON r.id = v.sync_run_id
+    CROSS JOIN LATERAL JSONB_EACH_TEXT(v.clan_deltas) AS d
+   WHERE r.status = 'succeeded'
+   GROUP BY d.key
+), chaves AS (
+  SELECT clan FROM rev_planilha_por_clan
+  UNION SELECT clan FROM por_execucao
+  UNION SELECT clan FROM por_token
+)
+SELECT k.clan,
+       COALESCE(s.pontos, 0) AS estado_atual,
+       COALESCE(e.pontos, 0) AS por_execucao,
+       COALESCE(t.pontos, 0) AS por_token
+  FROM chaves k
+  LEFT JOIN rev_planilha_por_clan s ON s.clan IS NOT DISTINCT FROM k.clan
+  LEFT JOIN por_execucao          e ON e.clan IS NOT DISTINCT FROM k.clan
+  LEFT JOIN por_token             t ON t.clan IS NOT DISTINCT FROM k.clan
+ WHERE COALESCE(s.pontos, 0) <> COALESCE(e.pontos, 0)
+    OR COALESCE(s.pontos, 0) <> COALESCE(t.pontos, 0)
+ ORDER BY k.clan;
+```
+
+`por_execucao` × `por_token` divergirem é impossível pelo pipeline — a migração
+`009` recusa aplicar um plano em que o agregado da execução não bate com a soma
+por token —, então qualquer linha aqui significa escrita fora do pipeline.
+Se vier linha: `ROLLBACK;` e investigue antes de qualquer coisa.
 
 #### 7.4.5 Passo 3 — tirar os pontos da planilha dos totais de clã
 
 Sempre por delta, nunca por valor absoluto (o absoluto apagaria toda
-contabilidade legítima feita depois da migração).
+contabilidade legítima feita depois da migração). A fonte é a tabela do passo 2
+— o mesmo conjunto que o passo 5 vai zerar:
 
 ```sql
 UPDATE pontos_ultimate_totais_por_clan t
    SET total_pontos = t.total_pontos - s.pontos
-  FROM (
-    SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos
-      FROM desafio_sync_runs r
-      CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
-     WHERE r.status = 'succeeded'
-       AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
-     GROUP BY d.key
-  ) s
+  FROM rev_planilha_por_clan s
  WHERE t.clan = s.clan;
 ```
 
@@ -407,15 +465,8 @@ Conferências imediatas — **as duas devem vir vazias**:
 ```sql
 -- nenhum clã com pontos da planilha ficou sem linha de total (o UPDATE acima
 -- não teria casado com nada, silenciosamente)
-SELECT s.clan
-  FROM (
-    SELECT d.key AS clan
-      FROM desafio_sync_runs r
-      CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
-     WHERE r.status = 'succeeded'
-       AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
-     GROUP BY d.key
-  ) s
+SELECT s.clan, s.pontos
+  FROM rev_planilha_por_clan s
   LEFT JOIN pontos_ultimate_totais_por_clan t ON t.clan = s.clan
  WHERE t.clan IS NULL;
 
@@ -442,15 +493,33 @@ UPDATE pontos_ultimate_totais_por_coach t
 ```
 
 Conferência contra o retrato de antes da migração (é o mesmo `clan_before` /
-`coach_before` que a função automática usaria):
+`coach_before` que a função automática usaria).
+
+Atenção ao termo `planilha_antes_da_fase_1`: `clan_before` é o total **imediato
+antes da Fase 1** e, por definição, já contém o efeito líquido de qualquer
+execução `succeeded` anterior a ela (as `posterior_a_migracao = false` do passo
+1). Esses pontos saíram no passo 3, e com razão — depois da reversão a planilha
+não pode contribuir com nada. Numa migração inicial esse termo é `0` para todos
+os clãs; se não for, ele é a explicação exata da diferença, e não um desvio.
 
 ```sql
+WITH planilha_pre AS (
+  SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos
+    FROM desafio_sync_runs r
+    CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
+   WHERE r.status = 'succeeded'
+     AND r.started_at < (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
+   GROUP BY d.key
+)
 SELECT t.clan,
        t.total_pontos                              AS agora,
        (m.clan_before->>t.clan)::INTEGER           AS antes_da_migracao,
-       t.total_pontos - (m.clan_before->>t.clan)::INTEGER AS diferenca
+       COALESCE(p.pontos, 0)                       AS planilha_antes_da_fase_1,
+       t.total_pontos - (m.clan_before->>t.clan)::INTEGER + COALESCE(p.pontos, 0)
+                                                   AS diferenca
   FROM pontos_ultimate_totais_por_clan t
   JOIN desafio_legacy_migracoes m ON m.id = <id>
+  LEFT JOIN planilha_pre p ON p.clan = t.clan
  WHERE m.clan_before ? t.clan
  ORDER BY t.clan;
 
@@ -464,9 +533,13 @@ SELECT t.coach,
  ORDER BY t.coach;
 ```
 
-`diferenca` só pode ser diferente de zero por contabilidade legítima rodada
-**depois** da migração. Se houver uma diferença que você não sabe explicar:
-`ROLLBACK;`.
+A consulta de coach não tem o termo da planilha porque o pipeline da planilha
+nunca escreve em `pontos_ultimate_totais_por_coach` (desafios deixaram de
+pontuar o ranking individual).
+
+Nas duas, `diferenca` só pode ser diferente de zero por contabilidade legítima
+rodada **depois** da migração. Se houver uma diferença que você não sabe
+explicar: `ROLLBACK;`.
 
 #### 7.4.7 Passo 5 — neutralizar o estado derivado da planilha
 
@@ -476,7 +549,21 @@ apagadas: `desafio_submission_versions.token` as referencia e aquela tabela é
 imutável por trigger (`008`). O que se faz é colocá-las exatamente no estado que
 uma sincronização normal produz para um token que saiu da planilha:
 
+São duas instruções com **exatamente o mesmo `WHERE`**, uma atrás da outra
+dentro da transação (ninguém mais escreve: o advisory lock está retido e a
+janela está congelada). A primeira só registra o que a segunda vai zerar; é ela
+que o passo 8 confronta com o passo 3.
+
 ```sql
+-- 5a — registra, antes de escrever, quantos pontos serão zerados por clã
+CREATE TEMP TABLE rev_neutralizados ON COMMIT DROP AS
+SELECT clan, SUM(points)::INTEGER AS pontos
+  FROM desafio_submissions_current
+ WHERE status <> 'inactive_missing'
+ GROUP BY clan
+HAVING SUM(points) <> 0;
+
+-- 5b — neutraliza
 UPDATE desafio_submissions_current
    SET status = 'inactive_missing',
        points = 0,
@@ -486,8 +573,9 @@ UPDATE desafio_submissions_current
 ```
 
 Isto **não** mexe em `pontos_ultimate_totais_por_clan` — os totais já foram
-corrigidos no passo 3 pelos deltas registrados. Note que `clan` é preservado, do
-mesmo jeito que a migração `009` faz ao inativar um token.
+corrigidos no passo 3, a partir do mesmo conjunto de tokens que o `WHERE` acima
+alcança. Note que `clan` é preservado, do mesmo jeito que a migração `009` faz
+ao inativar um token.
 
 Por que este estado e não outro: com `points = 0` e `inactive_missing`, todo
 leitor fica coerente (a fatia "Desafios" passa a mostrar zero, que é a verdade
@@ -535,9 +623,30 @@ UPDATE desafio_legacy_migracoes
 
 #### 7.4.10 Passo 8 — conferência final, ainda dentro da transação
 
-As três primeiras **devem vir vazias / zero**:
+As quatro **devem vir vazias / zero**:
 
 ```sql
+-- O passo 3 subtraiu exatamente o que o passo 5 zerou.
+--
+-- É a conferência que amarra os dois escopos. Enquanto o passo 3 subtraía só
+-- as execuções posteriores à migração e o passo 5 zerava todo token, uma
+-- sincronização anterior à Fase 1 deixava o total do clã inflado pela sua
+-- contribuição, com a fatia "Desafios" em zero — divergência que nenhuma das
+-- outras conferências enxerga (elas olham negativos, tokens ativos e
+-- restauração dos legados, e todas as três passariam).
+WITH chaves AS (
+  SELECT clan FROM rev_planilha_por_clan
+  UNION SELECT clan FROM rev_neutralizados
+)
+SELECT k.clan,
+       COALESCE(s.pontos, 0) AS subtraido_no_passo_3,
+       COALESCE(n.pontos, 0) AS zerado_no_passo_5
+  FROM chaves k
+  LEFT JOIN rev_planilha_por_clan s ON s.clan IS NOT DISTINCT FROM k.clan
+  LEFT JOIN rev_neutralizados     n ON n.clan IS NOT DISTINCT FROM k.clan
+ WHERE COALESCE(s.pontos, 0) <> COALESCE(n.pontos, 0)
+ ORDER BY k.clan;
+
 -- nenhum total negativo
 SELECT 'clan' AS escopo, clan AS chave, total_pontos
   FROM pontos_ultimate_totais_por_clan WHERE total_pontos < 0
@@ -576,8 +685,11 @@ Caso contrário, `ROLLBACK;` — nada terá acontecido.
   de desafio estão nos totais de clã (contribuição legada), mas as telas de
   desafio leem os tokens da planilha, que agora estão inativos. Não há mais
   caminho de leitura legado no app — é uma das razões para preferir 7.3.
-- Registre no incidente: `<migracao_id>`, as execuções listadas no passo 1, os
-  números dos passos 2 e 4 e a saída do passo 8.
+- Registre no incidente: `<migracao_id>`, as execuções listadas no passo 1 (com
+  a coluna `posterior_a_migracao`), `rev_planilha_por_clan` do passo 2, os
+  números do passo 4 (incluindo `planilha_antes_da_fase_1`) e a saída completa
+  do passo 8 — as tabelas temporárias somem no `COMMIT`, então o que não foi
+  colado se perde.
 - Uma nova Fase 1 pode ser executada do zero quando a causa estiver resolvida
   (a migração está `rolled_back`).
 

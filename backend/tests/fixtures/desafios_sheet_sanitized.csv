@@ -1,0 +1,12 @@
+Clã (legado),Nome,Validado,Link,Observação,Desafio,Clã atual,Enviado em,Token
+1,Participante A,Sim,http://example.com/1,Obs A,Desafio Alpha,,19/08/2026 10:00:00,TOK-E2E-001
+2,Participante A,Sim,,Obs A2,Desafio Beta,,19/08/2026 11:00:00,TOK-E2E-002
+,Participante B,Sim,,,Desafio Alpha,Clã 3,19/08/2026 12:00:00,TOK-E2E-003
+1,Participante C,Não,,,Desafio Alpha,,19/08/2026 13:00:00,TOK-E2E-004
+1,Participante A,Sim,http://example.com/1,Obs A,Desafio Alpha,,19/08/2026 10:00:00,TOK-E2E-001
+1,Participante D,Sim,,,Desafio Beta,,19/08/2026 14:00:00,TOK-E2E-005
+2,Participante D,Sim,,,Desafio Beta,,19/08/2026 14:00:00,TOK-E2E-005
+,Participante E,Sim,,,Desafio Alpha,,19/08/2026 15:00:00,TOK-E2E-006
+1,Participante F,Sim,,,,19/08/2026 16:00:00,TOK-E2E-007
+1,Participante G,Sim,,,Desafio Alpha,,data_invalida,TOK-E2E-008
+1,Participante H,Sim,,,Desafio Alpha,,19/08/2026 17:00:00,

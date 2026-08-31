@@ -80,6 +80,8 @@ aqui mesmo, neste arquivo, no commit correspondente.
 | 6 | Reexecução imediata na cópia produz delta zero | rodar `--apply` de novo (deve pular a Fase 1 e não mover nada) | relatório colado | |
 | 7 | Restauração na cópia devolve os totais originais | `SELECT restore_desafio_legacy_migracao(<id>);` | totais antes/depois | |
 | 8 | Backup da cópia tem checksum recomputável | consulta da seção 8 | checksum | |
+| 9 | Restauração é recusada depois de uma sincronização bem-sucedida, inclusive com `p_force` | `SELECT restore_desafio_legacy_migracao(<id>, TRUE);` **deve falhar** | mensagem de erro | |
+| 10 | Roteiro manual da seção 7.4 ensaiado na cópia | seção 7.4, do `BEGIN` ao `COMMIT` | saída do passo 8 | |
 
 Enquanto qualquer linha desta tabela estiver vazia, **não execute `--apply` em
 produção**.
@@ -245,16 +247,17 @@ SELECT restore_desafio_legacy_migracao(<migracao_id>);
 
 A função devolve os totais de clã e de coach exatamente aos valores anteriores
 (a partir de `clan_before` / `coach_before`) e desarquiva os desafios legados a
-partir do backup. Ela **se recusa a rodar** se já houve uma sincronização
-`succeeded` depois da migração — nesse caso, restaurar os totais também
-desfaria os pontos da planilha. Se essa é mesmo a intenção:
+partir do backup. Depois de uma restauração, a migração fica em
+`status = 'rolled_back'` e uma nova Fase 1 pode ser executada do zero.
 
-```sql
-SELECT restore_desafio_legacy_migracao(<migracao_id>, TRUE);
-```
-
-Depois de uma restauração, a migração fica em `status = 'rolled_back'` e uma
-nova Fase 1 pode ser executada do zero.
+> **Escopo:** esta função só serve para este desfecho — Fase 1 commitada,
+> Fase 2 **nunca** aplicada. Ela **recusa-se incondicionalmente** a rodar se
+> existir uma `desafio_sync_runs` com `status = 'succeeded'` posterior à
+> migração (erro `desafio_legacy_migration_restore_blocked_by_sync`). O
+> segundo argumento `p_force` **não é mais um bypass**: passá-lo falha com
+> `desafio_legacy_migration_force_removed`. Se a Fase 2 já aplicou, vá para a
+> **seção 7.4** — não existe rollback de um comando só, e não há como forçar
+> um.
 
 ### 7.3 As duas fases aplicaram, mas uma validação falhou (código `6`)
 
@@ -269,9 +272,314 @@ impressa pela CLI.
 - Reexecução sem delta zero: alguém editou a planilha entre a Fase 2 e a
   validação. Confirme com o responsável e reconfira.
 
-Se a decisão for reverter tudo, use `restore_desafio_legacy_migracao(<id>, TRUE)`
-(seção 7.2b) — lembrando que isso também desfaz os pontos da planilha
-aplicados pela Fase 2.
+Se, mesmo assim, a decisão for reverter tudo e voltar à contabilidade legada,
+**não existe comando único** — `restore_desafio_legacy_migracao` recusa
+(inclusive com `p_force`, que deixou de ser um bypass). Siga a seção 7.4.
+
+### 7.4 Reverter depois que a Fase 2 já aplicou — roteiro manual
+
+> **Último recurso.** Prefira sempre corrigir para frente (7.3). Este roteiro
+> devolve a pontuação à contabilidade legada e desliga a pontuação vinda da
+> planilha; ele é longo de propósito — cada passo tem uma conferência que pode
+> abortar tudo.
+
+#### 7.4.1 Por que não há um comando só
+
+`restore_desafio_legacy_migracao` restaura **apenas** os totais de clã/coach
+(`clan_before` / `coach_before`) e o estado dos desafios legados. Ela nunca
+tocou — e continua não tocando — em `desafio_submissions_current`, em
+`desafio_submission_versions` nem nos desafios `origem = 'google_sheets'`
+criados pela Fase 2. Rodá-la nesse estado (o antigo `p_force := TRUE`) deixava
+o banco assim:
+
+- os pontos da planilha saíam de `pontos_ultimate_totais_por_clan`, mas
+- todo token continuava `active_counted` em `desafio_submissions_current`, e a
+  sincronização seguinte, ao comparar planilha × estado, encontrava **delta
+  zero** — nunca somava os pontos de volta;
+- os desafios legados voltavam a `contabilizar_pontos = TRUE` enquanto a fatia
+  "Desafios" do dashboard (`get_tipo_clan_totals('desafios')`, que lê os
+  tokens, não `desafio_registros`) continuava reportando os pontos da planilha
+  que já não estavam no total do clã.
+
+Resultado: divergência contábil permanente, e nenhuma sincronização posterior a
+consertava. Por isso a guarda é incondicional agora.
+
+E por que a função não desfaz a Fase 2 sozinha: **nada no schema diz qual
+`desafio_sync_runs` foi a Fase 2**. O registro da migração é gravado antes de
+essa execução existir; a reexecução documentada em 7.2a pode produzir uma
+segunda execução `succeeded`; a própria seção 7.3 manda ressincronizar antes de
+decidir reverter. E as versões por token são imutáveis por trigger (migração
+`008`), com `desafio_submissions_current` como alvo de FK — as linhas da Fase 2
+não podem ser apagadas. Escolher a execução errada para desfazer seria pior que
+recusar.
+
+#### 7.4.2 Antes de começar
+
+- [ ] **Congele a janela.** Ninguém roda `Executar Contabilidade` (ele
+      sincroniza desafios a cada execução) e ninguém edita a planilha.
+- [ ] **Snapshot do banco** (PITR/dump) tirado agora, antes de qualquer escrita.
+- [ ] Anote o `<migracao_id>` (`SELECT id FROM desafio_legacy_migracoes WHERE
+      status = 'applied';`).
+- [ ] Tenha um `psql` conectado como papel de serviço. **Tudo abaixo roda em
+      uma única transação**, aberta com o mesmo advisory lock da sincronização:
+
+```sql
+BEGIN;
+SELECT pg_advisory_xact_lock(7345901220834561);
+```
+
+Se qualquer conferência abaixo devolver linha onde o texto diz "deve ser
+vazio", execute `ROLLBACK;` e pare. Substitua `<id>` pelo `<migracao_id>` em
+todas as consultas.
+
+#### 7.4.3 Passo 1 — quais execuções serão desfeitas
+
+```sql
+SELECT r.id, r.started_at, r.finished_at, r.snapshot_hash, r.clan_deltas
+  FROM desafio_sync_runs r
+ WHERE r.status = 'succeeded'
+   AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
+ ORDER BY r.started_at;
+```
+
+Cole o resultado no registro do incidente. **Todas** essas execuções serão
+revertidas — não só a Fase 2. Não existe reversão parcial suportada: se alguma
+delas não deveria ser desfeita, `ROLLBACK;` e reavalie.
+
+#### 7.4.4 Passo 2 — quanto a planilha somou, por clã (duas fontes independentes)
+
+```sql
+-- (a) agregado registrado por execução
+SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos_planilha
+  FROM desafio_sync_runs r
+  CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
+ WHERE r.status = 'succeeded'
+   AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
+ GROUP BY d.key HAVING SUM(d.value::INTEGER) <> 0
+ ORDER BY d.key;
+
+-- (b) o mesmo número reconstruído da trilha imutável por token
+SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos_planilha
+  FROM desafio_submission_versions v
+  JOIN desafio_sync_runs r ON r.id = v.sync_run_id
+  CROSS JOIN LATERAL JSONB_EACH_TEXT(v.clan_deltas) AS d
+ WHERE r.status = 'succeeded'
+   AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
+ GROUP BY d.key HAVING SUM(d.value::INTEGER) <> 0
+ ORDER BY d.key;
+```
+
+(a) e (b) **têm de ser idênticos** — a migração `009` recusa aplicar um plano em
+que eles divergem, então divergência aqui significa escrita fora do pipeline.
+Se divergirem: `ROLLBACK;` e investigue antes de qualquer coisa.
+
+Terceira conferência, válida quando **não havia nenhum token antes da Fase 1**
+(o caso de uma migração inicial): o que está ativo hoje tem de bater com (a).
+
+```sql
+SELECT clan, SUM(points) AS ativos_hoje
+  FROM desafio_submissions_current
+ WHERE status = 'active_counted'
+ GROUP BY clan ORDER BY clan;
+```
+
+#### 7.4.5 Passo 3 — tirar os pontos da planilha dos totais de clã
+
+Sempre por delta, nunca por valor absoluto (o absoluto apagaria toda
+contabilidade legítima feita depois da migração).
+
+```sql
+UPDATE pontos_ultimate_totais_por_clan t
+   SET total_pontos = t.total_pontos - s.pontos
+  FROM (
+    SELECT d.key AS clan, SUM(d.value::INTEGER) AS pontos
+      FROM desafio_sync_runs r
+      CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
+     WHERE r.status = 'succeeded'
+       AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
+     GROUP BY d.key
+  ) s
+ WHERE t.clan = s.clan;
+```
+
+Conferências imediatas — **as duas devem vir vazias**:
+
+```sql
+-- nenhum clã com pontos da planilha ficou sem linha de total (o UPDATE acima
+-- não teria casado com nada, silenciosamente)
+SELECT s.clan
+  FROM (
+    SELECT d.key AS clan
+      FROM desafio_sync_runs r
+      CROSS JOIN LATERAL JSONB_EACH_TEXT(r.clan_deltas) AS d
+     WHERE r.status = 'succeeded'
+       AND r.started_at >= (SELECT started_at FROM desafio_legacy_migracoes WHERE id = <id>)
+     GROUP BY d.key
+  ) s
+  LEFT JOIN pontos_ultimate_totais_por_clan t ON t.clan = s.clan
+ WHERE t.clan IS NULL;
+
+-- nenhum total negativo (nunca truncar para zero — mesma regra da migração)
+SELECT clan, total_pontos FROM pontos_ultimate_totais_por_clan WHERE total_pontos < 0;
+```
+
+#### 7.4.6 Passo 4 — devolver a contribuição legada removida pela Fase 1
+
+Também por delta, a partir de `clan_removido` / `coach_removido` (o que a Fase 1
+efetivamente subtraiu):
+
+```sql
+UPDATE pontos_ultimate_totais_por_clan t
+   SET total_pontos = t.total_pontos + (m.clan_removido->>t.clan)::INTEGER
+  FROM desafio_legacy_migracoes m
+ WHERE m.id = <id> AND m.clan_removido ? t.clan;
+
+UPDATE pontos_ultimate_totais_por_coach t
+   SET total_pontos = t.total_pontos + (m.coach_removido->>t.coach)::INTEGER,
+       updated_at = NOW()
+  FROM desafio_legacy_migracoes m
+ WHERE m.id = <id> AND m.coach_removido ? t.coach;
+```
+
+Conferência contra o retrato de antes da migração (é o mesmo `clan_before` /
+`coach_before` que a função automática usaria):
+
+```sql
+SELECT t.clan,
+       t.total_pontos                              AS agora,
+       (m.clan_before->>t.clan)::INTEGER           AS antes_da_migracao,
+       t.total_pontos - (m.clan_before->>t.clan)::INTEGER AS diferenca
+  FROM pontos_ultimate_totais_por_clan t
+  JOIN desafio_legacy_migracoes m ON m.id = <id>
+ WHERE m.clan_before ? t.clan
+ ORDER BY t.clan;
+
+SELECT t.coach,
+       t.total_pontos                               AS agora,
+       (m.coach_before->>t.coach)::INTEGER          AS antes_da_migracao,
+       t.total_pontos - (m.coach_before->>t.coach)::INTEGER AS diferenca
+  FROM pontos_ultimate_totais_por_coach t
+  JOIN desafio_legacy_migracoes m ON m.id = <id>
+ WHERE m.coach_before ? t.coach
+ ORDER BY t.coach;
+```
+
+`diferenca` só pode ser diferente de zero por contabilidade legítima rodada
+**depois** da migração. Se houver uma diferença que você não sabe explicar:
+`ROLLBACK;`.
+
+#### 7.4.7 Passo 5 — neutralizar o estado derivado da planilha
+
+**É o passo que a restauração automática nunca fez, e o motivo de a guarda ser
+incondicional.** As linhas de `desafio_submissions_current` não podem ser
+apagadas: `desafio_submission_versions.token` as referencia e aquela tabela é
+imutável por trigger (`008`). O que se faz é colocá-las exatamente no estado que
+uma sincronização normal produz para um token que saiu da planilha:
+
+```sql
+UPDATE desafio_submissions_current
+   SET status = 'inactive_missing',
+       points = 0,
+       inactivated_at = NOW(),
+       updated_at = NOW()
+ WHERE status <> 'inactive_missing';
+```
+
+Isto **não** mexe em `pontos_ultimate_totais_por_clan` — os totais já foram
+corrigidos no passo 3 pelos deltas registrados. Note que `clan` é preservado, do
+mesmo jeito que a migração `009` faz ao inativar um token.
+
+Por que este estado e não outro: com `points = 0` e `inactive_missing`, todo
+leitor fica coerente (a fatia "Desafios" passa a mostrar zero, que é a verdade
+depois da reversão) e, se um dia se decidir voltar ao pipeline da planilha, a
+sincronização seguinte enxerga cada token como **reaparecido** e soma os pontos
+de volta com o delta correto. É isso que torna o banco ressincronizável — o que
+o antigo `p_force := TRUE` destruía.
+
+Arquive também os desafios criados pela planilha (sem apagar nada):
+
+```sql
+UPDATE desafios
+   SET status = 'arquivado',
+       arquivado_at = COALESCE(arquivado_at, NOW()),
+       updated_at = NOW()
+ WHERE origem = 'google_sheets' AND status <> 'arquivado';
+```
+
+#### 7.4.8 Passo 6 — desarquivar os desafios legados
+
+Exatamente o que a função automática faz, a partir do backup imutável:
+
+```sql
+UPDATE desafios d
+   SET status = b.conteudo->>'status',
+       contabilizar_pontos = (b.conteudo->>'contabilizar_pontos')::BOOLEAN,
+       arquivado_at = (b.conteudo->>'arquivado_at')::TIMESTAMPTZ,
+       updated_at = NOW()
+  FROM desafio_legacy_migracao_backup b
+ WHERE b.migracao_id = <id>
+   AND b.tabela = 'desafios'
+   AND d.id = (b.conteudo->>'id')::INTEGER;
+```
+
+#### 7.4.9 Passo 7 — marcar a migração como revertida
+
+Sem isso o índice único parcial impede uma futura Fase 1 (só pode existir uma
+migração `applied`):
+
+```sql
+UPDATE desafio_legacy_migracoes
+   SET status = 'rolled_back', rolled_back_at = NOW()
+ WHERE id = <id> AND status = 'applied';
+```
+
+#### 7.4.10 Passo 8 — conferência final, ainda dentro da transação
+
+As três primeiras **devem vir vazias / zero**:
+
+```sql
+-- nenhum total negativo
+SELECT 'clan' AS escopo, clan AS chave, total_pontos
+  FROM pontos_ultimate_totais_por_clan WHERE total_pontos < 0
+UNION ALL
+SELECT 'coach', coach, total_pontos
+  FROM pontos_ultimate_totais_por_coach WHERE total_pontos < 0;
+
+-- nenhum token ainda pontuando pela planilha
+SELECT COUNT(*) FROM desafio_submissions_current WHERE status = 'active_counted';
+
+-- todo desafio legado de volta ao estado do backup
+SELECT COUNT(*)
+  FROM desafio_legacy_migracao_backup b
+  JOIN desafios d ON d.id = (b.conteudo->>'id')::INTEGER
+ WHERE b.migracao_id = <id> AND b.tabela = 'desafios'
+   AND (d.status IS DISTINCT FROM b.conteudo->>'status'
+     OR d.contabilizar_pontos IS DISTINCT FROM (b.conteudo->>'contabilizar_pontos')::BOOLEAN);
+```
+
+Se tudo bateu:
+
+```sql
+COMMIT;
+```
+
+Caso contrário, `ROLLBACK;` — nada terá acontecido.
+
+#### 7.4.11 Depois do commit
+
+- **Desligue o pipeline da planilha**, ou a próxima `Executar Contabilidade`
+  ressomará os pontos (por desenho: os tokens voltam como "reaparecidos").
+  Basta esvaziar `GSHEET_DESAFIOS_SPREADSHEET_ID` (ou revogar o acesso da
+  service account) no ambiente: a sincronização passa a terminar em `failed`,
+  que não escreve nada e não bloqueia o resto da contabilidade.
+- **Espere que a fatia "Desafios" mostre zero.** Depois da reversão, os pontos
+  de desafio estão nos totais de clã (contribuição legada), mas as telas de
+  desafio leem os tokens da planilha, que agora estão inativos. Não há mais
+  caminho de leitura legado no app — é uma das razões para preferir 7.3.
+- Registre no incidente: `<migracao_id>`, as execuções listadas no passo 1, os
+  números dos passos 2 e 4 e a saída do passo 8.
+- Uma nova Fase 1 pode ser executada do zero quando a causa estiver resolvida
+  (a migração está `rolled_back`).
 
 ---
 

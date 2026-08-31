@@ -444,6 +444,32 @@ def test_reappeared_token_scores_again_without_double_counting():
     assert version.point_delta == 10
 
 
+def test_estado_deixado_pelo_rollback_manual_volta_a_ser_sincronizavel():
+    """O roteiro manual da seção 7.4 do runbook deixa o banco ressincronizável.
+
+    Quando a reversão pós-Fase-2 é feita à mão, os tokens não podem ser
+    apagados (`desafio_submission_versions` é imutável por trigger e os
+    referencia), então o roteiro faz exatamente o que a própria sincronização
+    faz com um token que sumiu da planilha: `status = 'inactive_missing'`,
+    `points = 0` — sem mexer em `clan`, que a migração 009 também preserva.
+
+    Este teste trava a consequência que importa: a partir desse estado, uma
+    sincronização seguinte reconhece o token como reaparecido e soma os pontos
+    de volta com o delta correto. Era exatamente isso que o antigo
+    `restore_desafio_legacy_migracao(<id>, TRUE)` impedia — ele deixava os
+    tokens `active_counted`, e aí o delta seguinte era zero para sempre.
+    """
+    current = {"T1": _current(status="inactive_missing", points=0, clan="CLÃ 1")}
+    snapshot = build_desafio_snapshot([_row(token="T1")], POINTS)
+
+    plan = reconcile_desafios(snapshot, current)
+
+    assert plan.clan_deltas == {"CLÃ 1": 10}
+    version = plan.token_versions[0]
+    assert version.change_reason == "reappeared"
+    assert version.point_delta == 10
+
+
 # ---------------------------------------------------------------------------
 # Ciclo de vida de desafios: CA-11, CA-12, CA-13
 # ---------------------------------------------------------------------------

@@ -483,6 +483,12 @@ COMMENT ON FUNCTION migrate_desafio_legacy_contribution() IS
 
 -- ---------------------------------------------------------------------------
 -- Restauração administrativa (rollback pós-transação)
+--
+-- Escopo: **apenas** o desfecho "Fase 1 commitada, Fase 2 nunca aplicada".
+-- Depois de uma sincronização bem-sucedida esta função recusa
+-- incondicionalmente — ela não desfaz o estado por token da Fase 2, e não há
+-- como saber qual execução foi a Fase 2. Roteiro manual: seção 7.4 de
+-- docs/runbooks/migracao-desafios-google-sheets.md.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION restore_desafio_legacy_migracao(
@@ -532,9 +538,38 @@ BEGIN
       p_migracao_id, v_status;
   END IF;
 
-  -- Restaurar os totais para o estado pré-migração também desfaz os pontos que
-  -- uma sincronização bem-sucedida tenha somado depois. Se isso aconteceu, o
-  -- operador precisa dizer explicitamente que é o que quer.
+  -- ---------------------------------------------------------------------
+  -- Guarda incondicional: depois de uma sincronização bem-sucedida esta
+  -- função não sabe mais desfazer nada.
+  --
+  -- Ela reescreve `pontos_ultimate_totais_por_clan` / `_por_coach` a partir de
+  -- `clan_before` / `coach_before` e desarquiva os desafios legados — e só
+  -- isso. Ela **não** toca em `desafio_submissions_current`, em
+  -- `desafio_submission_versions` nem nos desafios `origem = 'google_sheets'`
+  -- que a Fase 2 criou. Rodar assim mesmo (o antigo `p_force := TRUE`) deixava
+  -- o banco num estado que nenhuma sincronização posterior conseguia
+  -- consertar:
+  --   * os pontos da planilha saíam dos totais de clã, mas
+  --   * todo token continuava `active_counted` em
+  --     `desafio_submissions_current`, então o próximo `sync_desafios`
+  --     calculava delta zero e nunca os somava de volta, e
+  --   * os desafios legados voltavam a `contabilizar_pontos = TRUE` enquanto
+  --     `get_tipo_clan_totals('desafios')` continuava lendo os tokens — a
+  --     fatia "desafios" passava a não fechar com o total do clã.
+  -- Ou seja: divergência contábil permanente, alcançável seguindo o runbook.
+  --
+  -- Fazer a função desfazer também a Fase 2 não é possível com segurança:
+  -- nada no schema marca qual `desafio_sync_runs` foi a Fase 2 (o registro da
+  -- migração é gravado antes dela existir), o caminho de reexecução
+  -- documentado — `ja_migrado` pula a Fase 1 e refaz só a Fase 2 — pode
+  -- produzir mais de uma execução `succeeded`, o próprio runbook manda
+  -- ressincronizar antes de decidir reverter, e as versões por token são
+  -- imutáveis por trigger (migração 008) com `desafio_submissions_current`
+  -- como alvo de FK — as linhas da Fase 2 não podem ser apagadas. Uma escolha
+  -- errada de execução a desfazer é pior que uma recusa.
+  --
+  -- Recusa honesta, portanto, e roteiro manual na seção 7.4 do runbook.
+  -- ---------------------------------------------------------------------
   SELECT id INTO v_sync_depois
     FROM desafio_sync_runs
    WHERE status = 'succeeded'
@@ -542,10 +577,20 @@ BEGIN
    ORDER BY started_at
    LIMIT 1;
 
-  IF v_sync_depois IS NOT NULL AND NOT p_force THEN
+  IF v_sync_depois IS NOT NULL THEN
     RAISE EXCEPTION
-      'desafio_legacy_migration_restore_blocked_by_sync: a execução de sincronização #% ocorreu depois da migração; restaurar os totais também desfaria seus pontos (use p_force := TRUE para prosseguir)',
-      v_sync_depois;
+      'desafio_legacy_migration_restore_blocked_by_sync: a execução de sincronização #% ocorreu depois da migração #%; esta função restaura apenas totais e desafios legados, e não desfaz o estado por token gravado pela Fase 2 — p_force NÃO desbloqueia este caso. Siga o roteiro manual da seção 7.4 de docs/runbooks/migracao-desafios-google-sheets.md',
+      v_sync_depois, p_migracao_id;
+  END IF;
+
+  -- Sem sincronização posterior a restauração é correta e completa; `p_force`
+  -- não tem mais nada para forçar. A assinatura é mantida (GRANTs e chamadas
+  -- antigas continuam resolvendo), mas passar TRUE falha alto em vez de
+  -- sugerir um poder que não existe mais.
+  IF p_force THEN
+    RAISE EXCEPTION
+      'desafio_legacy_migration_force_removed: p_force não é mais um bypass; chame restore_desafio_legacy_migracao(%) sem o segundo argumento',
+      p_migracao_id;
   END IF;
 
   FOR v_chave, v_total IN
@@ -591,16 +636,18 @@ BEGIN
     'migracao_id', p_migracao_id,
     'clans_restaurados', v_clans,
     'coaches_restaurados', v_coaches,
-    'desafios_restaurados', v_desafios,
-    'sync_posterior_ignorada', v_sync_depois
+    'desafios_restaurados', v_desafios
   );
 END;
 $$;
 
 COMMENT ON FUNCTION restore_desafio_legacy_migracao(BIGINT, BOOLEAN) IS
   'Restaura, a partir do backup da fase 1, os totais de clã/coach e o estado '
-  'dos desafios legados. Recusa-se a rodar se uma sincronização bem-sucedida '
-  'ocorreu depois da migração, a menos que p_force seja TRUE.';
+  'dos desafios legados. Só serve para o desfecho "Fase 1 commitada, Fase 2 '
+  'nunca aplicada": recusa-se incondicionalmente a rodar se existe uma '
+  'sincronização bem-sucedida posterior à migração, porque não desfaz o estado '
+  'por token da fase 2. p_force é mantido apenas na assinatura e não é mais um '
+  'bypass — ver seção 7.4 do runbook para o roteiro manual desse caso.';
 
 -- Estas funções reescrevem totais reais: nenhum papel público pode executá-las.
 -- Revogar de PUBLIC é o que fecha a porta (anon/authenticated herdam de

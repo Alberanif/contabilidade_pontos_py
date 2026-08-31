@@ -47,7 +47,10 @@ RPC_REPORT = "desafio_legacy_migration_report"
 RPC_MIGRATE = "migrate_desafio_legacy_contribution"
 # A restauração (`restore_desafio_legacy_migracao`) é deliberadamente manual,
 # por SQL, e não tem flag nesta CLI: desfazer pontuação de produção não deve ser
-# tão fácil quanto digitar um argumento. O procedimento está no runbook.
+# tão fácil quanto digitar um argumento. O procedimento está no runbook — e ela
+# só cobre "Fase 1 commitada, Fase 2 nunca aplicada"; depois de uma
+# sincronização bem-sucedida ela recusa (seção 7.4 do runbook traz o roteiro
+# manual, porque nada no schema identifica qual execução foi a Fase 2).
 
 EXIT_OK = 0
 EXIT_PRECONDITION = 2
@@ -506,9 +509,11 @@ def main(argv: list[str] | None = None) -> int:
         for falha in falhas:
             print(f"  - {falha}")
         print(
-            f"As duas fases foram aplicadas. Investigue antes de liberar o uso; "
-            f"o procedimento de rollback está em {RUNBOOK} "
-            f"(migração #{migracao_id})."
+            f"As duas fases foram aplicadas. Investigue antes de liberar o uso: "
+            f"corrigir para frente é o caminho normal (seção 7.3 do {RUNBOOK}). "
+            f"Não há rollback automático depois da Fase 2 — "
+            f"`restore_desafio_legacy_migracao` recusa, e o roteiro manual está "
+            f"na seção 7.4 (migração #{migracao_id})."
         )
         return EXIT_VALIDATION_FAILED
 

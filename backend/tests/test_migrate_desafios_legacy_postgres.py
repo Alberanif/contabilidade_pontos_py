@@ -6,7 +6,10 @@ isolado e o remove ao final, sem tocar nas tabelas da aplicação.
 Cobre o que só pode ser provado contra um banco real: advisory lock
 compartilhado com a sincronização, subtração explícita da contribuição legada
 (nunca truncada para zero), aborto integral em caso de total negativo, backup
-verificável e imutável, e restauração administrativa a partir desse backup.
+verificável e imutável, e restauração administrativa a partir desse backup —
+incluindo a recusa **incondicional** de restaurar depois de uma sincronização
+bem-sucedida (a Fase 2 grava estado por token que esta função não desfaz; o
+caminho manual está na seção 7.4 do runbook).
 """
 
 import os
@@ -178,7 +181,12 @@ def _migrate(connection) -> dict:
     ).fetchone()[0]
 
 
-def _restore(connection, migracao_id: int, force: bool = False) -> dict:
+def _restore(connection, migracao_id: int, force: bool | None = None) -> dict:
+    """Restaura. Sem `force`, usa a forma de um argumento — a do runbook."""
+    if force is None:
+        return connection.execute(
+            "SELECT restore_desafio_legacy_migracao(%s)", (migracao_id,)
+        ).fetchone()[0]
     return connection.execute(
         "SELECT restore_desafio_legacy_migracao(%s, %s)", (migracao_id, force)
     ).fetchone()[0]
@@ -512,28 +520,105 @@ def test_restauracao_liberada_apos_rollback_permite_nova_migracao(database):
     assert _clan_totals(database)["CLÃ 1"] == 70
 
 
-def test_restauracao_e_bloqueada_quando_ja_houve_sincronizacao(database):
-    """Restaurar os totais depois da fase 2 desfaria os pontos da planilha."""
-    result = _migrate(database)
-    database.execute(
-        """
-        INSERT INTO desafio_sync_runs (status, points_per_submission)
-        VALUES ('succeeded', 10)
-        """
+def _sync_run(connection, status: str = "succeeded") -> int:
+    """Simula uma execução de sincronização já finalizada."""
+    return connection.execute(
+        "INSERT INTO desafio_sync_runs (status, points_per_submission)"
+        " VALUES (%s, 10) RETURNING id",
+        (status,),
+    ).fetchone()[0]
+
+
+def _estado_pos_migracao(connection) -> tuple:
+    return (
+        _clan_totals(connection),
+        _coach_totals(connection),
+        connection.execute(
+            "SELECT id, status, contabilizar_pontos FROM desafios ORDER BY id"
+        ).fetchall(),
+        connection.execute(
+            "SELECT status, rolled_back_at FROM desafio_legacy_migracoes ORDER BY id"
+        ).fetchall(),
     )
+
+
+def test_restauracao_e_bloqueada_apos_sincronizacao_inclusive_com_force(database):
+    """Depois da Fase 2 não há rollback automático — `p_force` não fura a guarda.
+
+    Restaurar os totais aqui desfaria os pontos da planilha **sem** desfazer o
+    estado por token que a Fase 2 gravou: os tokens continuariam
+    `active_counted`, a sincronização seguinte calcularia delta zero e nunca os
+    somaria de volta. Divergência permanente — por isso a recusa é
+    incondicional (roteiro manual na seção 7.4 do runbook).
+    """
+    result = _migrate(database)
+    _sync_run(database)
+    antes = _estado_pos_migracao(database)
+
+    for force in (None, False, True):
+        with pytest.raises(
+            psycopg.errors.RaiseException,
+            match="desafio_legacy_migration_restore_blocked_by_sync",
+        ):
+            _restore(database, result["migracao_id"], force=force)
+
+    # Nada mudou: nem totais, nem desafios, nem o status da migração (que
+    # continua 'applied', e portanto continua restaurável se a sincronização
+    # for desfeita à mão antes).
+    assert _estado_pos_migracao(database) == antes
+    assert _clan_totals(database)["CLÃ 1"] == 70
+
+
+def test_restauracao_bloqueada_mesmo_com_varias_sincronizacoes_posteriores(database):
+    """A ambiguidade que impede o rollback automático, explicitada.
+
+    O caminho de reexecução documentado (`ja_migrado` pula a Fase 1 e refaz só
+    a Fase 2) e o próprio conselho do runbook de ressincronizar antes de
+    decidir reverter produzem mais de uma execução `succeeded` depois da
+    migração. Nada no schema diz qual delas foi a Fase 2, então não há
+    execução "certa" para desfazer — e a função recusa em vez de escolher.
+    """
+    result = _migrate(database)
+    primeira = _sync_run(database)
+    segunda = _sync_run(database)
+    assert segunda > primeira
 
     with pytest.raises(
         psycopg.errors.RaiseException,
         match="desafio_legacy_migration_restore_blocked_by_sync",
     ):
-        _restore(database, result["migracao_id"])
+        _restore(database, result["migracao_id"], force=True)
 
     assert _clan_totals(database)["CLÃ 1"] == 70
 
-    # Com consentimento explícito, a restauração acontece mesmo assim.
-    forced = _restore(database, result["migracao_id"], force=True)
-    assert forced["sync_posterior_ignorada"] is not None
-    assert _clan_totals(database)["CLÃ 1"] == 100
+
+def test_sincronizacao_malsucedida_posterior_nao_bloqueia_a_restauracao(database):
+    """Só execuções `succeeded` gravaram alguma coisa; as demais não bloqueiam."""
+    antes_clan = _clan_totals(database)
+    result = _migrate(database)
+    _sync_run(database, status="failed")
+
+    restored = _restore(database, result["migracao_id"])
+
+    assert restored["status"] == "rolled_back"
+    assert _clan_totals(database) == antes_clan
+
+
+def test_force_sem_sincronizacao_posterior_e_rejeitado_sem_escrever_nada(database):
+    """`p_force` sobrevive só na assinatura: usá-lo falha alto, nunca pela metade."""
+    result = _migrate(database)
+    antes = _estado_pos_migracao(database)
+
+    with pytest.raises(
+        psycopg.errors.RaiseException,
+        match="desafio_legacy_migration_force_removed",
+    ):
+        _restore(database, result["migracao_id"], force=True)
+
+    assert _estado_pos_migracao(database) == antes
+
+    # A forma correta continua funcionando.
+    assert _restore(database, result["migracao_id"])["status"] == "rolled_back"
 
 
 def test_restaurar_migracao_inexistente_falha(database):

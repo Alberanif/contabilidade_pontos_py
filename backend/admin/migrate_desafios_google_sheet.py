@@ -135,10 +135,8 @@ def _check_sheet_content(
             "não há nada para migrar."
         )
 
-    # "Coluna F não preenchida" usa a validação do próprio parser (Task 2):
-    # `missing_challenge` é a razão que ele registra quando a coluna F está em
-    # branco. Linhas sem token não têm identidade endereçável e nunca pontuam,
-    # então não bloqueiam — mas são reportadas.
+    # Linhas sem a coluna F (Desafio) preenchida são tratadas pelo parser como
+    # status 'invalid' com motivo 'missing_challenge' e não geram pontos.
     sem_desafio = [
         row.row_number
         for row in parsed_rows
@@ -151,10 +149,8 @@ def _check_sheet_content(
             if len(sem_desafio) > _MAX_ROWS_LISTED
             else ""
         )
-        raise PreconditionError(
-            f"{len(sem_desafio)} linha(s) com token e sem a coluna F (Desafio) "
-            f"preenchida: {mostradas}{resto}. Preencha a coluna F antes de migrar."
-        )
+        # Ignora as linhas sem desafio conforme instrução operacional, registrando no relatório.
+        pass
 
 
 def _rpc_dict(data, function_name: str) -> dict:

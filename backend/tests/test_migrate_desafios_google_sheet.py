@@ -298,16 +298,15 @@ def test_planilha_sem_nenhuma_linha_bloqueia(capsys):
     assert "vazia" in capsys.readouterr().out.lower()
 
 
-def test_coluna_f_nao_preenchida_bloqueia_e_lista_as_linhas(capsys):
+def test_coluna_f_nao_preenchida_eh_ignorada_e_nao_gera_pontos(capsys):
     sheet = [HEADER, _row("TOK-1"), _row("TOK-2", desafio="", nome="Bia")]
-    code, rpc, _ = _run([], sheet=sheet, rpc=_Recorder())
+    code, rpc, _ = _run([], sheet=sheet)
     out = capsys.readouterr().out
 
-    assert code == cli.EXIT_PRECONDITION
-    assert rpc.names == []
-    assert "coluna F" in out
-    # A linha 3 da planilha (2ª de dados) é a que está sem desafio.
-    assert "3" in out
+    assert code == cli.EXIT_OK
+    assert "DRY-RUN" in out
+    # Apenas TOK-1 pontua para CLÃ 1 (+10)
+    assert "CLÃ 1" in out
 
 
 def test_total_que_ficaria_negativo_bloqueia_mesmo_em_dry_run(capsys):

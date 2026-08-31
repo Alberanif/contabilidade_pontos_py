@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import config  # noqa: F401 — valida variáveis de ambiente ao importar
+from logging_config import configure_logging
 from routers import (
     contabilidade,
     registros,
@@ -14,6 +15,8 @@ from routers import (
     desafio_auditoria,
     desafio_import,
 )
+
+configure_logging()
 
 app = FastAPI(
     title="Calcula Pontos Ultimate",

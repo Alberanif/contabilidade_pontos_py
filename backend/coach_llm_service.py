@@ -86,7 +86,9 @@ Se raw="Nome Completamente Estranho" e não há correspondente na lista, respond
             messages=[{"role": "user", "content": prompt}],
             temperature=config.GROQ_TEMPERATURE,
             response_format={"type": "json_object"},
+            timeout=10.0,
         )
+
         response_text = completion.choices[0].message.content or "{}"
         data = json.loads(response_text)
 

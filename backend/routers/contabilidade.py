@@ -555,13 +555,14 @@ def sugerir_aliases_llm():
     e auto-aprova (se confianca >= 95%) ou adiciona à fila de pendentes (se 70-94%)."""
     try:
         import coach_llm_service
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        # Lista de coaches que já possuem totais ou são valores oficiais de aliases
         alias_map = supabase_client.get_coach_alias_map()
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
         raw_coaches |= supabase_client.get_all_desafio_coach_names()
 
+        # Coaches oficiais conhecidos (canônicos ativos em totais ou mapa de aliases)
         known_canonicals = set(alias_map.values())
         totais = supabase_client.list_coach_totals()
         if totais:
@@ -569,49 +570,73 @@ def sugerir_aliases_llm():
 
         # Se não houver totais ainda, consideramos todos os raw_coaches como lista base
         canonical_list = sorted(list(known_canonicals | raw_coaches))
+        known_canonical_keys = {coach_identity.normalize_key(c): c for c in known_canonicals}
 
-        # Seleciona nomes brutos que ainda não são um alias cadastrado
-        unmapped_coaches = [c for c in raw_coaches if c not in alias_map]
+        # Seleciona APENAS nomes brutos que realmente precisam de resolução:
+        # 1. Não estão no alias_map
+        # 2. Não estão em known_canonicals
+        # 3. Não possuem correspondência exata via normalize_key com coaches oficiais (Camada 1 já resolve)
+        unmapped_coaches = []
+        for raw in raw_coaches:
+            if raw in alias_map or raw in known_canonicals:
+                continue
+            if coach_identity.normalize_key(raw) in known_canonical_keys:
+                continue
+            unmapped_coaches.append(raw)
 
-        total_analisados = 0
+
+        print(f"[IA COACHES] Analisando {len(unmapped_coaches)} candidato(s) inéditos de um total de {len(raw_coaches)} nomes na base.")
+
+        if not unmapped_coaches:
+            return SugerirAliasesLLMResponse(
+                total_analisados=0,
+                auto_aprovados=0,
+                enviados_para_fila=0,
+                sem_correspondencia=0,
+                mensagem="Todos os nomes de coaches na base já foram resolvidos ou normalizados!",
+            )
+
+        total_analisados = len(unmapped_coaches)
         auto_aprovados = 0
         enviados_para_fila = 0
         sem_correspondencia = 0
 
-        for raw_name in unmapped_coaches:
-            # Compara o nome bruto contra todos os OUTROS nomes canônicos
+        # Executa a avaliação em paralelo para performance ultra rápida
+        def _eval_one(raw_name: str):
             raw_key = coach_identity.normalize_key(raw_name)
             targets = [c for c in canonical_list if coach_identity.normalize_key(c) != raw_key]
-
             if not targets:
-                continue
+                return raw_name, {"action": "no_match", "coach_canonico": raw_name, "confianca": 0.0, "origem": "none"}
+            return raw_name, coach_llm_service.evaluate_coach_identity(raw_name, targets)
 
-            total_analisados += 1
-            res = coach_llm_service.evaluate_coach_identity(raw_name, targets)
-            action = res["action"]
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_map = {executor.submit(_eval_one, raw_name): raw_name for raw_name in unmapped_coaches}
+            for future in as_completed(future_map):
+                raw_name, res = future.result()
+                action = res["action"]
+                print(f"[IA COACHES] Resultado para '{raw_name}': {res}")
 
-
-            if action == "auto_approve":
-                supabase_client.insert_coach_alias(raw_name, res["coach_canonico"])
-                supabase_client.upsert_pending_coach_alias(
-                    alias_raw=raw_name,
-                    coach_sugerido=res["coach_canonico"],
-                    confianca=res["confianca"],
-                    origem=res["origem"],
-                    status="aprovado",
-                )
-                auto_aprovados += 1
-            elif action == "pending_queue":
-                supabase_client.upsert_pending_coach_alias(
-                    alias_raw=raw_name,
-                    coach_sugerido=res["coach_canonico"],
-                    confianca=res["confianca"],
-                    origem=res["origem"],
-                    status="pendente",
-                )
-                enviados_para_fila += 1
-            else:
-                sem_correspondencia += 1
+                if action == "auto_approve":
+                    supabase_client.insert_coach_alias(raw_name, res["coach_canonico"])
+                    supabase_client.upsert_pending_coach_alias(
+                        alias_raw=raw_name,
+                        coach_sugerido=res["coach_canonico"],
+                        confianca=res["confianca"],
+                        origem=res["origem"],
+                        status="aprovado",
+                    )
+                    auto_aprovados += 1
+                elif action == "pending_queue":
+                    supabase_client.upsert_pending_coach_alias(
+                        alias_raw=raw_name,
+                        coach_sugerido=res["coach_canonico"],
+                        confianca=res["confianca"],
+                        origem=res["origem"],
+                        status="pendente",
+                    )
+                    enviados_para_fila += 1
+                else:
+                    sem_correspondencia += 1
 
         if auto_aprovados > 0:
             reprocessar_coaches()
@@ -621,8 +646,9 @@ def sugerir_aliases_llm():
             auto_aprovados=auto_aprovados,
             enviados_para_fila=enviados_para_fila,
             sem_correspondencia=sem_correspondencia,
-            mensagem=f"Análise concluída. {auto_aprovados} auto-aprovados, {enviados_para_fila} enviados para a fila.",
+            mensagem=f"Análise concluída. {total_analisados} analisados ({auto_aprovados} auto-aprovados, {enviados_para_fila} na fila de pendentes).",
         )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao executar sugestões LLM: {str(e)}")
 

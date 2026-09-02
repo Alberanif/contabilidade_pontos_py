@@ -96,17 +96,34 @@ Responda EXCLUSIVAMENTE um objeto JSON estrito com o formato:
 }}
 """
 
-    try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=config.GROQ_TEMPERATURE,
-            response_format={"type": "json_object"},
-            timeout=10.0,
-        )
+    import time
 
+    completion = None
+    for attempt in range(3):
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=config.GROQ_TEMPERATURE,
+                response_format={"type": "json_object"},
+                timeout=10.0,
+            )
+            break
+        except Exception as e:
+            if "429" in str(e) or "rate_limit" in str(e).lower():
+                logger.warning(f"Rate limit atingido na API Groq. Aguardando 2s antes de tentar novamente (tentativa {attempt + 1}/3)...")
+                time.sleep(2.0)
+            else:
+                logger.error(f"Erro ao consultar a API Groq para '{raw_name}': {e}")
+                return None, 0.0
+
+    if not completion:
+        return None, 0.0
+
+    try:
         response_text = completion.choices[0].message.content or "{}"
         data = json.loads(response_text)
+
 
         coach_sugerido = data.get("coach_sugerido")
         confianca = float(data.get("confianca", 0.0))

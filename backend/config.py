@@ -74,7 +74,8 @@ COL_DATE_PRO_BONO = 9   # Coluna J (índice 9)  — data na planilha de pro-bono
 
 # Groq LLM Agent (opcional)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.0"))
+
 
 

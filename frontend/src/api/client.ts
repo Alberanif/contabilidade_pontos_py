@@ -376,3 +376,49 @@ export function confirmarImportacaoDesafio(
 export function fetchDesafiosImportaveis(): Promise<Desafio[]> {
   return request('/api/desafios?origem=csv_import');
 }
+
+// --- Aliases de Coaches (IA / Groq) ---
+
+export interface PendingAlias {
+  id: number;
+  alias_raw: string;
+  coach_sugerido: string;
+  confianca: number;
+  origem: string;
+  status: string;
+  created_at: string;
+}
+
+export interface SugerirAliasesResponse {
+  total_analisados: number;
+  auto_aprovados: number;
+  enviados_para_fila: number;
+  sem_correspondencia: number;
+  mensagem: string;
+}
+
+export function fetchPendingAliases(status = "pendente"): Promise<PendingAlias[]> {
+  return request(`/api/contabilidade/aliases-pendentes?status=${status}`);
+}
+
+export function triggerSugerirAliasesLLM(): Promise<SugerirAliasesResponse> {
+  return request("/api/contabilidade/sugerir-aliases-llm", { method: "POST" });
+}
+
+export function aprovarAliasPendente(
+  id_pendente: number,
+  coach_canonico_override?: string
+): Promise<{ status: string; mensagem: string }> {
+  return request("/api/contabilidade/aprovar-alias-pendente", {
+    method: "POST",
+    body: JSON.stringify({ id_pendente, coach_canonico_override }),
+  });
+}
+
+export function rejeitarAliasPendente(id_pendente: number): Promise<{ status: string; mensagem: string }> {
+  return request("/api/contabilidade/rejeitar-alias-pendente", {
+    method: "POST",
+    body: JSON.stringify({ id_pendente }),
+  });
+}
+

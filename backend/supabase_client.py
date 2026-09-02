@@ -12,6 +12,8 @@ TABLE_DESAFIO_REGISTROS = "desafio_registros"
 TABLE_DESAFIO_REGISTROS_COACH = "desafio_registros_coach"
 TABLE_DESAFIO_IMPORTACAO_LINHAS = "desafio_importacao_linhas"
 TABLE_COACH_ALIASES = "pontos_ultimate_coach_aliases"
+TABLE_COACH_ALIASES_PENDENTES = "pontos_ultimate_coach_aliases_pendentes"
+
 
 
 def _get_client() -> Client:
@@ -375,6 +377,54 @@ def insert_coach_alias(alias: str, coach_canonico: str) -> dict:
         .execute()
     )
     return result.data[0] if result.data else {}
+
+
+def get_pending_coach_aliases(status: str = "pendente") -> list[dict]:
+    """Retorna lista de sugestões de aliases pendentes."""
+    client = _get_client()
+    query = client.table(TABLE_COACH_ALIASES_PENDENTES).select("*")
+    if status:
+        query = query.eq("status", status)
+    result = query.order("created_at", desc=True).execute()
+    return result.data or []
+
+
+def get_pending_coach_alias_by_id(id_pendente: int) -> dict | None:
+    """Busca uma sugestão pendente pelo ID."""
+    client = _get_client()
+    result = client.table(TABLE_COACH_ALIASES_PENDENTES).select("*").eq("id", id_pendente).execute()
+    return result.data[0] if result.data else None
+
+
+def upsert_pending_coach_alias(
+    alias_raw: str, coach_sugerido: str, confianca: float, origem: str = "groq-llm", status: str = "pendente"
+) -> dict:
+    """Cadastra ou atualiza uma sugestão de alias pendente."""
+    client = _get_client()
+    data = {
+        "alias_raw": alias_raw,
+        "coach_sugerido": coach_sugerido,
+        "confianca": confianca,
+        "origem": origem,
+        "status": status,
+    }
+    result = (
+        client.table(TABLE_COACH_ALIASES_PENDENTES)
+        .upsert(data, on_conflict="alias_raw")
+        .execute()
+    )
+    return result.data[0] if result.data else {}
+
+
+def update_pending_coach_alias_status(id_pendente: int, status: str, coach_sugerido: str | None = None) -> dict:
+    """Atualiza o status (e opcionalmente a sugestão) de um alias pendente."""
+    client = _get_client()
+    payload = {"status": status}
+    if coach_sugerido:
+        payload["coach_sugerido"] = coach_sugerido
+    result = client.table(TABLE_COACH_ALIASES_PENDENTES).update(payload).eq("id", id_pendente).execute()
+    return result.data[0] if result.data else {}
+
 
 
 # --- Desafios ---

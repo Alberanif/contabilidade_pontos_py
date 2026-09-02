@@ -532,6 +532,162 @@ def reprocessar_coaches():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class AprovarAliasPendenteRequest(BaseModel):
+    id_pendente: int
+    coach_canonico_override: str | None = None
+
+
+class RejeitarAliasPendenteRequest(BaseModel):
+    id_pendente: int
+
+
+class SugerirAliasesLLMResponse(BaseModel):
+    total_analisados: int
+    auto_aprovados: int
+    enviados_para_fila: int
+    sem_correspondencia: int
+    mensagem: str
+
+
+@router.post("/sugerir-aliases-llm", response_model=SugerirAliasesLLMResponse)
+def sugerir_aliases_llm():
+    """Varre nomes brutos de coaches na base, avalia via RapidFuzz + Groq LLM
+    e auto-aprova (se confianca >= 95%) ou adiciona à fila de pendentes (se 70-94%)."""
+    try:
+        import coach_llm_service
+
+        # Lista de coaches que já possuem totais ou são valores oficiais de aliases
+        alias_map = supabase_client.get_coach_alias_map()
+        all_regs = supabase_client.list_all_registros()
+        raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
+        raw_coaches |= supabase_client.get_all_desafio_coach_names()
+
+        known_canonicals = set(alias_map.values())
+        totais = supabase_client.list_coach_totals()
+        if totais:
+            known_canonicals |= {t["coach"] for t in totais if t.get("coach")}
+
+        # Se não houver totais ainda, consideramos todos os raw_coaches como lista base
+        canonical_list = sorted(list(known_canonicals | raw_coaches))
+
+        # Seleciona nomes brutos que ainda não são um alias cadastrado
+        unmapped_coaches = [c for c in raw_coaches if c not in alias_map]
+
+        total_analisados = 0
+        auto_aprovados = 0
+        enviados_para_fila = 0
+        sem_correspondencia = 0
+
+        for raw_name in unmapped_coaches:
+            # Compara o nome bruto contra todos os OUTROS nomes canônicos
+            raw_key = coach_identity.normalize_key(raw_name)
+            targets = [c for c in canonical_list if coach_identity.normalize_key(c) != raw_key]
+
+            if not targets:
+                continue
+
+            total_analisados += 1
+            res = coach_llm_service.evaluate_coach_identity(raw_name, targets)
+            action = res["action"]
+
+
+            if action == "auto_approve":
+                supabase_client.insert_coach_alias(raw_name, res["coach_canonico"])
+                supabase_client.upsert_pending_coach_alias(
+                    alias_raw=raw_name,
+                    coach_sugerido=res["coach_canonico"],
+                    confianca=res["confianca"],
+                    origem=res["origem"],
+                    status="aprovado",
+                )
+                auto_aprovados += 1
+            elif action == "pending_queue":
+                supabase_client.upsert_pending_coach_alias(
+                    alias_raw=raw_name,
+                    coach_sugerido=res["coach_canonico"],
+                    confianca=res["confianca"],
+                    origem=res["origem"],
+                    status="pendente",
+                )
+                enviados_para_fila += 1
+            else:
+                sem_correspondencia += 1
+
+        if auto_aprovados > 0:
+            reprocessar_coaches()
+
+        return SugerirAliasesLLMResponse(
+            total_analisados=total_analisados,
+            auto_aprovados=auto_aprovados,
+            enviados_para_fila=enviados_para_fila,
+            sem_correspondencia=sem_correspondencia,
+            mensagem=f"Análise concluída. {auto_aprovados} auto-aprovados, {enviados_para_fila} enviados para a fila.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao executar sugestões LLM: {str(e)}")
+
+
+@router.get("/aliases-pendentes")
+def get_aliases_pendentes(status: str = "pendente"):
+    """Retorna a lista de sugestões de aliases pendentes para revisão no Dashboard."""
+    try:
+        return supabase_client.get_pending_coach_aliases(status=status)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao listar aliases pendentes: {str(e)}")
+
+
+@router.post("/aprovar-alias-pendente")
+def aprovar_alias_pendente(body: AprovarAliasPendenteRequest):
+    """Aprova uma sugestão de alias pendente e dispara automaticamente o recálculo dos totais."""
+    try:
+        pendente = supabase_client.get_pending_coach_alias_by_id(body.id_pendente)
+        if not pendente:
+            raise HTTPException(status_code=404, detail="Sugestão pendente não encontrada.")
+
+        coach_canonico = body.coach_canonico_override or pendente["coach_sugerido"]
+        alias_raw = pendente["alias_raw"]
+
+        # Insere na tabela oficial de aliases
+        supabase_client.insert_coach_alias(alias_raw, coach_canonico)
+
+        # Atualiza status na tabela de pendentes
+        supabase_client.update_pending_coach_alias_status(body.id_pendente, status="aprovado", coach_sugerido=coach_canonico)
+
+        # Dispara recálculo automático de totais
+        reprocessamento = reprocessar_coaches()
+
+        return {
+            "status": "sucesso",
+            "mensagem": f"Alias '{alias_raw}' -> '{coach_canonico}' aprovado com sucesso.",
+            "reprocessamento": reprocessamento,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao aprovar alias pendente: {str(e)}")
+
+
+@router.post("/rejeitar-alias-pendente")
+def rejeitar_alias_pendente(body: RejeitarAliasPendenteRequest):
+    """Marca a sugestão de alias pendente como rejeitada."""
+    try:
+        pendente = supabase_client.get_pending_coach_alias_by_id(body.id_pendente)
+        if not pendente:
+            raise HTTPException(status_code=404, detail="Sugestão pendente não encontrada.")
+
+        supabase_client.update_pending_coach_alias_status(body.id_pendente, status="rejeitado")
+
+        return {
+            "status": "sucesso",
+            "mensagem": f"Sugestão de alias '{pendente['alias_raw']}' rejeitada.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao rejeitar alias pendente: {str(e)}")
+
+
+
 @router.post("/executar", response_model=ExecutarResponse)
 def executar_contabilidade():
     try:
@@ -1070,13 +1226,11 @@ def debug_date_sample():
 
 @router.post("/atualizar-planilha", response_model=AtualizarPlanilhaResponse)
 def atualizar_planilha():
-    """Sincroniza os totais de pontos dos clãs do banco para a planilha Google Sheets."""
+    """Endpoint mantido para compatibilidade — o sistema opera em modo estritamente de leitura do Google Sheets."""
     try:
-        totais = supabase_client.get_clan_totals()
-        resultado = google_sheets_client.sync_clan_totals_to_sheet(totais)
         return AtualizarPlanilhaResponse(
-            totais_atualizados=resultado,
-            mensagem=f"{len(resultado)} clã(s) atualizados na planilha.",
+            totais_atualizados={},
+            mensagem="Sincronização com o Google Sheets desativada (sistema em modo estritamente de leitura).",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

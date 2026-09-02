@@ -14,8 +14,10 @@ import {
   type HistoricoResponse,
 } from "../api/client";
 import ClanCard from "../components/ClanCard";
+import PendingAliasesCard from "../components/PendingAliasesCard";
 
 const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+
 
 type TipoFiltro = "todos" | "pagante" | "pro_bono" | "desafios";
 
@@ -417,8 +419,12 @@ export default function Dashboard() {
       )}
 
       {activeTab === "coaches" && (
-        <div className="mt-8">
-          <h3 className="text-lg font-semibold text-gray-700 mb-3">Ranking de Coaches</h3>
+        <div className="mt-8 space-y-6">
+          <PendingAliasesCard onAliasApproved={loadData} />
+
+          <div>
+            <h3 className="text-lg font-semibold text-gray-700 mb-3">Ranking de Coaches</h3>
+
           {loading ? (
             <p className="text-gray-500">Carregando coaches...</p>
           ) : (activeData ? Object.keys(activeData.coaches).length === 0 : coaches.length === 0) ? (
@@ -467,8 +473,10 @@ export default function Dashboard() {
               </div>
             );
           })()}
+          </div>
         </div>
       )}
     </div>
   );
 }
+

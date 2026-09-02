@@ -465,11 +465,27 @@ def reprocessar_coaches():
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
         raw_coaches |= supabase_client.get_all_desafio_coach_names()
+        raw_coaches |= {t["coach"] for t in supabase_client.list_coach_totals() if t.get("coach")}
+
+        # Mapeamento implícito por normalize_key (resolve maiúsculas/minúsculas/acentos idênticos)
+        # Prefere nome formatado com maiúsculas/minúsculas sobre ALL CAPS
+        by_norm_key: dict[str, str] = {}
+        for c in sorted(list(set(alias_map.values()) | raw_coaches)):
+            nk = coach_identity.normalize_key(c)
+            if nk not in by_norm_key:
+                by_norm_key[nk] = c
+            elif by_norm_key[nk].isupper() and not c.isupper():
+                by_norm_key[nk] = c
 
         registros_atualizados = 0
         coaches_afetados: set[str] = set()
         for raw_coach in raw_coaches:
             canonical = coach_identity.resolve_coach(raw_coach, alias_map)
+            if canonical == raw_coach:
+                nk = coach_identity.normalize_key(raw_coach)
+                if nk in by_norm_key and by_norm_key[nk] != raw_coach:
+                    canonical = by_norm_key[nk]
+
             if canonical != raw_coach:
                 registros_atualizados += supabase_client.update_registros_coach(raw_coach, canonical)
                 supabase_client.update_desafio_importacao_linhas_coach(raw_coach, canonical)
@@ -558,29 +574,25 @@ def sugerir_aliases_llm():
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         alias_map = supabase_client.get_coach_alias_map()
+        alias_keys_norm = {coach_identity.normalize_key(k) for k in alias_map.keys()}
+
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
         raw_coaches |= supabase_client.get_all_desafio_coach_names()
-
-        # Coaches oficiais conhecidos (canônicos ativos em totais ou mapa de aliases)
-        known_canonicals = set(alias_map.values())
         totais = supabase_client.list_coach_totals()
         if totais:
-            known_canonicals |= {t["coach"] for t in totais if t.get("coach")}
+            raw_coaches |= {t["coach"] for t in totais if t.get("coach")}
 
-        # Se não houver totais ainda, consideramos todos os raw_coaches como lista base
-        canonical_list = sorted(list(known_canonicals | raw_coaches))
-        known_canonical_keys = {coach_identity.normalize_key(c): c for c in known_canonicals}
+        canonical_list = sorted(list(set(alias_map.values()) | raw_coaches))
 
         # Seleciona APENAS nomes brutos que realmente precisam de resolução:
-        # 1. Não estão no alias_map
-        # 2. Não estão em known_canonicals
-        # 3. Não possuem correspondência exata via normalize_key com coaches oficiais (Camada 1 já resolve)
+        # 1. Não estão no alias_map como chave
+        # 2. Não possuem correspondência de chave no alias_map
         unmapped_coaches = []
         for raw in raw_coaches:
-            if raw in alias_map or raw in known_canonicals:
+            if raw in alias_map:
                 continue
-            if coach_identity.normalize_key(raw) in known_canonical_keys:
+            if coach_identity.normalize_key(raw) in alias_keys_norm:
                 continue
             unmapped_coaches.append(raw)
 
@@ -1311,25 +1323,26 @@ def preencher_datas():
 
 
 @router.get("/historico", response_model=HistoricoResponse)
-async def historico(inicio: str = Query(..., description="Data inicial no formato YYYY-MM-DD"), fim: str = Query(..., description="Data final no formato YYYY-MM-DD")):
+async def historico(
+    inicio: str = Query(..., description="Data inicial no formato YYYY-MM-DD"),
+    fim: str | None = Query(None, description="Data final no formato YYYY-MM-DD (opcional)")
+):
     """
-    Get ranking for a date period [inicio, fim].
-    Both dates required, ISO format (YYYY-MM-DD).
+    Get ranking for a date period starting from `inicio` (and optionally ending at `fim`).
+    ISO format (YYYY-MM-DD).
     Returns summed points within period for clans and coaches.
     """
     try:
-        # Validate both params present
-        if not inicio or not fim:
-            raise HTTPException(status_code=400, detail="inicio and fim are required")
+        if not inicio:
+            raise HTTPException(status_code=400, detail="inicio is required")
 
         try:
             inicio_date = datetime.fromisoformat(inicio).date()
-            fim_date = datetime.fromisoformat(fim).date()
+            fim_date = datetime.fromisoformat(fim).date() if fim else None
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
-        # Validate inicio <= fim
-        if inicio_date > fim_date:
+        if inicio_date and fim_date and inicio_date > fim_date:
             raise HTTPException(status_code=400, detail="inicio must be <= fim")
 
         # Get period totals
@@ -1372,15 +1385,16 @@ async def totais_por_tipo(
 
         inicio_date: date | None = None
         fim_date: date | None = None
-        if inicio and fim:
+        if inicio:
             try:
                 inicio_date = datetime.fromisoformat(inicio).date()
-                fim_date = datetime.fromisoformat(fim).date()
+                if fim:
+                    fim_date = datetime.fromisoformat(fim).date()
             except ValueError:
                 raise HTTPException(
                     status_code=400, detail="Invalid date format. Use YYYY-MM-DD"
                 )
-            if inicio_date > fim_date:
+            if inicio_date and fim_date and inicio_date > fim_date:
                 raise HTTPException(
                     status_code=400, detail="inicio must be <= fim"
                 )

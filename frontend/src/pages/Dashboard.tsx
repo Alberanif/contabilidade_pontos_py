@@ -37,6 +37,7 @@ export default function Dashboard() {
 
   const [dataInicio, setDataInicio] = useState<string>("");
   const [dataFim, setDataFim] = useState<string>("");
+  const [travarInicio, setTravarInicio] = useState<boolean>(false);
   const [historicoData, setHistoricoData] = useState<HistoricoResponse | null>(null);
   const [loadingHistorico, setLoadingHistorico] = useState(false);
 
@@ -78,20 +79,27 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!dataInicio || !dataFim || tipoFiltro !== "todos") {
-      return; // Don't fetch if either date is empty or type filter is active
+    if (tipoFiltro !== "todos") return;
+
+    const hasValidDate = travarInicio ? Boolean(dataInicio) : Boolean(dataInicio && dataFim);
+    if (!hasValidDate) {
+      setHistoricoData(null);
+      return;
     }
 
-    if (dataInicio > dataFim) {
+    if (dataInicio && dataFim && dataInicio > dataFim && !travarInicio) {
       console.warn("Data início deve ser anterior a data fim");
-      return; // Don't fetch if dates are inverted
+      return;
     }
 
     const applyFilter = async () => {
       try {
         setLoadingHistorico(true);
         setError("");
-        const data = await fetchHistorico(dataInicio, dataFim);
+        const data = await fetchHistorico(
+          dataInicio,
+          travarInicio && !dataFim ? undefined : (dataFim || undefined)
+        );
         setHistoricoData(data);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Erro ao carregar histórico");
@@ -102,7 +110,7 @@ export default function Dashboard() {
     };
 
     applyFilter();
-  }, [dataInicio, dataFim, tipoFiltro]);
+  }, [dataInicio, dataFim, tipoFiltro, travarInicio]);
 
   useEffect(() => {
     if (tipoFiltro === "todos") {
@@ -116,7 +124,7 @@ export default function Dashboard() {
         const data = await fetchTotaisPorTipo(
           tipoFiltro,
           dataInicio || undefined,
-          dataFim || undefined
+          travarInicio && !dataFim ? undefined : (dataFim || undefined)
         );
         setTipoData(data);
       } catch (e) {
@@ -127,7 +135,7 @@ export default function Dashboard() {
       }
     };
     fetchData();
-  }, [tipoFiltro, dataInicio, dataFim]);
+  }, [tipoFiltro, dataInicio, dataFim, travarInicio]);
 
   const activeData = tipoFiltro !== "todos" ? tipoData : historicoData;
 
@@ -212,7 +220,7 @@ export default function Dashboard() {
         })}
       </div>
 
-      <div className="flex gap-4 items-end mb-4">
+      <div className="flex gap-4 items-end mb-4 flex-wrap">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             De:
@@ -221,7 +229,7 @@ export default function Dashboard() {
             type="date"
             value={dataInicio}
             onChange={(e) => setDataInicio(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg"
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           />
         </div>
         <div>
@@ -232,51 +240,76 @@ export default function Dashboard() {
             type="date"
             value={dataFim}
             onChange={(e) => setDataFim(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg"
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           />
         </div>
+        <button
+          type="button"
+          onClick={() => setTravarInicio(!travarInicio)}
+          className={`px-4 py-2 rounded-lg font-medium border transition-colors ${
+            travarInicio
+              ? "bg-amber-500 text-white border-amber-600 shadow-sm"
+              : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+          }`}
+          title="Ao ativar, filtra a partir da data de início selecionada em diante"
+        >
+          {travarInicio ? "🔒 Travar Início (Ativo)" : "Travar Início"}
+        </button>
         <button
           onClick={() => {
             setDataInicio("");
             setDataFim("");
+            setTravarInicio(false);
             setHistoricoData(null);
           }}
-          className="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400"
+          className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
         >
           Limpar filtro
         </button>
       </div>
 
-      {activeData && (tipoFiltro !== "todos" || (dataInicio && dataFim)) && (
+      {activeData && (tipoFiltro !== "todos" || (travarInicio ? Boolean(dataInicio) : (dataInicio && dataFim))) && (
         <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 rounded-lg text-sm">
           {tipoFiltro !== "todos" && (
             <>
-              Visualizando <strong>{tipoFiltro.charAt(0).toUpperCase() + tipoFiltro.slice(1) === "Pagante" ? "Pagantes" : tipoFiltro === "pro_bono" ? "Pro Bono" : "Desafios"}</strong>
-              {dataInicio && dataFim && (
+              Visualizando <strong>{tipoFiltro === "pagante" ? "Pagantes" : tipoFiltro === "pro_bono" ? "Pro Bono" : "Desafios"}</strong>
+              {dataInicio && (
                 <>
-                  {" "}de{" "}
+                  {" "}a partir de{" "}
                   <strong>
                     {new Date(dataInicio + "T00:00:00").toLocaleDateString("pt-BR")}
                   </strong>
-                  {" "}até{" "}
-                  <strong>
-                    {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
-                  </strong>
+                  {dataFim ? (
+                    <>
+                      {" "}até{" "}
+                      <strong>
+                        {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
+                      </strong>
+                    </>
+                  ) : (
+                    " em diante"
+                  )}
                 </>
               )}
               .
             </>
           )}
-          {tipoFiltro === "todos" && dataInicio && dataFim && (
+          {tipoFiltro === "todos" && dataInicio && (
             <>
-              Visualizando período de{" "}
+              Visualizando período a partir de{" "}
               <strong>
                 {new Date(dataInicio + "T00:00:00").toLocaleDateString("pt-BR")}
               </strong>
-              {" "}até{" "}
-              <strong>
-                {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
-              </strong>
+              {dataFim ? (
+                <>
+                  {" "}até{" "}
+                  <strong>
+                    {new Date(dataFim + "T00:00:00").toLocaleDateString("pt-BR")}
+                  </strong>
+                </>
+              ) : (
+                " em diante"
+              )}
               .
             </>
           )}

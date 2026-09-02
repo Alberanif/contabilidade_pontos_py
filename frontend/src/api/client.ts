@@ -204,10 +204,10 @@ export interface HistoricoResponse {
   coaches: Record<string, number>;
 }
 
-export function fetchHistorico(inicio: string, fim: string): Promise<HistoricoResponse> {
-  return request(
-    `/api/contabilidade/historico?inicio=${encodeURIComponent(inicio)}&fim=${encodeURIComponent(fim)}`
-  );
+export function fetchHistorico(inicio: string, fim?: string): Promise<HistoricoResponse> {
+  const params = new URLSearchParams({ inicio });
+  if (fim) params.set("fim", fim);
+  return request(`/api/contabilidade/historico?${params}`);
 }
 
 export function fetchTotaisPorTipo(

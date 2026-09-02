@@ -381,49 +381,66 @@ def insert_coach_alias(alias: str, coach_canonico: str) -> dict:
 
 def get_pending_coach_aliases(status: str = "pendente") -> list[dict]:
     """Retorna lista de sugestões de aliases pendentes."""
-    client = _get_client()
-    query = client.table(TABLE_COACH_ALIASES_PENDENTES).select("*")
-    if status:
-        query = query.eq("status", status)
-    result = query.order("created_at", desc=True).execute()
-    return result.data or []
+    try:
+        client = _get_client()
+        query = client.table(TABLE_COACH_ALIASES_PENDENTES).select("*")
+        if status:
+            query = query.eq("status", status)
+        result = query.order("created_at", desc=True).execute()
+        return result.data or []
+    except Exception as e:
+        print(f"[AVISO] Tabela {TABLE_COACH_ALIASES_PENDENTES} pode não existir ainda no Supabase: {e}")
+        return []
 
 
 def get_pending_coach_alias_by_id(id_pendente: int) -> dict | None:
     """Busca uma sugestão pendente pelo ID."""
-    client = _get_client()
-    result = client.table(TABLE_COACH_ALIASES_PENDENTES).select("*").eq("id", id_pendente).execute()
-    return result.data[0] if result.data else None
+    try:
+        client = _get_client()
+        result = client.table(TABLE_COACH_ALIASES_PENDENTES).select("*").eq("id", id_pendente).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        print(f"[ERRO] Falha ao buscar alias pendente {id_pendente}: {e}")
+        return None
 
 
 def upsert_pending_coach_alias(
     alias_raw: str, coach_sugerido: str, confianca: float, origem: str = "groq-llm", status: str = "pendente"
 ) -> dict:
     """Cadastra ou atualiza uma sugestão de alias pendente."""
-    client = _get_client()
-    data = {
-        "alias_raw": alias_raw,
-        "coach_sugerido": coach_sugerido,
-        "confianca": confianca,
-        "origem": origem,
-        "status": status,
-    }
-    result = (
-        client.table(TABLE_COACH_ALIASES_PENDENTES)
-        .upsert(data, on_conflict="alias_raw")
-        .execute()
-    )
-    return result.data[0] if result.data else {}
+    try:
+        client = _get_client()
+        data = {
+            "alias_raw": alias_raw,
+            "coach_sugerido": coach_sugerido,
+            "confianca": confianca,
+            "origem": origem,
+            "status": status,
+        }
+        result = (
+            client.table(TABLE_COACH_ALIASES_PENDENTES)
+            .upsert(data, on_conflict="alias_raw")
+            .execute()
+        )
+        return result.data[0] if result.data else {}
+    except Exception as e:
+        print(f"[ERRO] Falha ao upsertar alias pendente {alias_raw}: {e}")
+        return {}
 
 
 def update_pending_coach_alias_status(id_pendente: int, status: str, coach_sugerido: str | None = None) -> dict:
     """Atualiza o status (e opcionalmente a sugestão) de um alias pendente."""
-    client = _get_client()
-    payload = {"status": status}
-    if coach_sugerido:
-        payload["coach_sugerido"] = coach_sugerido
-    result = client.table(TABLE_COACH_ALIASES_PENDENTES).update(payload).eq("id", id_pendente).execute()
-    return result.data[0] if result.data else {}
+    try:
+        client = _get_client()
+        payload = {"status": status}
+        if coach_sugerido:
+            payload["coach_sugerido"] = coach_sugerido
+        result = client.table(TABLE_COACH_ALIASES_PENDENTES).update(payload).eq("id", id_pendente).execute()
+        return result.data[0] if result.data else {}
+    except Exception as e:
+        print(f"[ERRO] Falha ao atualizar status do alias pendente {id_pendente}: {e}")
+        return {}
+
 
 
 
@@ -863,7 +880,7 @@ def count_desafio_registros_by_desafio() -> dict[int, int]:
 # --- Consultas por período (filtradas por data_registro) ---
 
 
-def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
+def get_period_clan_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
     Sum all pontos for records within the period [inicio, fim].
     Group coaching records (pontos == POINTS_PER_RECORD_IN_BATCH) are floored
@@ -875,9 +892,10 @@ def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
         client.table(TABLE_REGISTROS)
         .select("clan, pontos")
         .gte("data_registro", inicio.isoformat())
-        .lte("data_registro", fim.isoformat())
         .eq("status", "contabilizado")
     )
+    if fim:
+        query = query.lte("data_registro", fim.isoformat())
     records = query.execute().data
 
     group_raw: dict[str, int] = {}
@@ -898,7 +916,7 @@ def get_period_clan_totals(inicio: date, fim: date) -> dict[str, int]:
     return totals
 
 
-def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
+def get_period_coach_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
     Sum all pontos_coach for records within the period [inicio, fim].
     Group coaching records (pontos_coach == POINTS_PER_RECORD_IN_BATCH) are floored
@@ -910,9 +928,10 @@ def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
         client.table(TABLE_REGISTROS)
         .select("coach, pontos_coach")
         .gte("data_registro", inicio.isoformat())
-        .lte("data_registro", fim.isoformat())
         .eq("status_coach", "contabilizado")
     )
+    if fim:
+        query = query.lte("data_registro", fim.isoformat())
     records = query.execute().data
 
     group_raw: dict[str, int] = {}
@@ -935,7 +954,7 @@ def get_period_coach_totals(inicio: date, fim: date) -> dict[str, int]:
     return totals
 
 
-def get_period_desafio_totals(inicio: date, fim: date) -> dict[str, int]:
+def get_period_desafio_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
     Sum desafio points for desafios within the period [inicio, fim].
     Only includes desafios with contabilizar_pontos=true.
@@ -948,9 +967,10 @@ def get_period_desafio_totals(inicio: date, fim: date) -> dict[str, int]:
         client.table(TABLE_DESAFIOS)
         .select("id")
         .gte("data", inicio.isoformat())
-        .lte("data", fim.isoformat())
         .eq("contabilizar_pontos", True)
     )
+    if fim:
+        desafios_query = desafios_query.lte("data", fim.isoformat())
     desafios = desafios_query.execute().data
     desafio_ids = [d["id"] for d in desafios]
 
@@ -973,7 +993,7 @@ def get_period_desafio_totals(inicio: date, fim: date) -> dict[str, int]:
     return totals
 
 
-def get_period_desafio_coach_totals(inicio: date, fim: date) -> dict[str, int]:
+def get_period_desafio_coach_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
     Sum desafio points per coach for desafios within the period [inicio, fim].
     Only includes desafios with contabilizar_pontos=true.
@@ -985,9 +1005,10 @@ def get_period_desafio_coach_totals(inicio: date, fim: date) -> dict[str, int]:
         client.table(TABLE_DESAFIOS)
         .select("id")
         .gte("data", inicio.isoformat())
-        .lte("data", fim.isoformat())
         .eq("contabilizar_pontos", True)
     )
+    if fim:
+        desafios_query = desafios_query.lte("data", fim.isoformat())
     desafios = desafios_query.execute().data
     desafio_ids = [d["id"] for d in desafios]
 
@@ -1017,7 +1038,7 @@ def get_tipo_clan_totals(
     client = _get_client()
 
     if tipo == "desafios":
-        if inicio and fim:
+        if inicio:
             return get_period_desafio_totals(inicio, fim)
         desafios = (
             client.table(TABLE_DESAFIOS)
@@ -1042,7 +1063,7 @@ def get_tipo_clan_totals(
         return totals
 
     # Without date filter: read breakdown columns from TABLE_TOTAIS
-    if not (inicio and fim):
+    if not inicio:
         if tipo == "pagante":
             col = "total_pagante"
         elif tipo == "pro_bono":
@@ -1063,8 +1084,9 @@ def get_tipo_clan_totals(
         .select("clan, pontos, modalidade")
         .eq("status", "contabilizado")
         .gte("data_registro", inicio.isoformat())
-        .lte("data_registro", fim.isoformat())
     )
+    if fim:
+        query = query.lte("data_registro", fim.isoformat())
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"
@@ -1094,7 +1116,7 @@ def get_tipo_coach_totals(
     fim: "date | None" = None,
 ) -> dict[str, int]:
     if tipo == "desafios":
-        if inicio and fim:
+        if inicio:
             return get_period_desafio_coach_totals(inicio, fim)
         client = _get_client()
         desafios = (
@@ -1122,7 +1144,7 @@ def get_tipo_coach_totals(
     client = _get_client()
 
     # Without date filter: read breakdown columns from TABLE_TOTAIS_COACH
-    if not (inicio and fim):
+    if not inicio:
         if tipo == "pagante":
             col = "total_pagante"
         elif tipo == "pro_bono":
@@ -1143,8 +1165,9 @@ def get_tipo_coach_totals(
         .select("coach, pontos_coach, modalidade")
         .eq("status_coach", "contabilizado")
         .gte("data_registro", inicio.isoformat())
-        .lte("data_registro", fim.isoformat())
     )
+    if fim:
+        query = query.lte("data_registro", fim.isoformat())
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"

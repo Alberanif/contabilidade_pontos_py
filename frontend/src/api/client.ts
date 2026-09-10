@@ -300,6 +300,7 @@ export interface DesafioAuditoria {
 
 export interface DesafioAuditoriaDetalhe extends DesafioAuditoria {
   pontos_por_clan: Record<string, number>;
+  pontos_por_coach: Record<string, number>;
 }
 
 // As 9 células brutas da planilha (colunas A-I), tanto na forma posicional
@@ -311,6 +312,7 @@ export interface DesafioSubmissao {
   raw_cells: unknown[];
   raw_clan_legacy: string | null;
   raw_name: string | null;
+  coach: string | null;
   raw_validation: string | null;
   raw_link: string | null;
   raw_observation: string | null;
@@ -342,6 +344,7 @@ export interface DesafioSubmissaoVersao {
   raw_cells: unknown[];
   raw_clan_legacy: string | null;
   raw_name: string | null;
+  coach: string | null;
   raw_validation: string | null;
   raw_link: string | null;
   raw_observation: string | null;

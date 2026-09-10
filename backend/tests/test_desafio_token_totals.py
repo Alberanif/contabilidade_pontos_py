@@ -349,76 +349,86 @@ class TestCorrecaoRetroativaMoveOuRemoveContribuicao:
 
 
 # ---------------------------------------------------------------------------
-# Regressão: nada disso toca o lado coach (issue #17 / Task 6 continua valendo)
+# Fase 2: o lado coach dos desafios também passa a ler os tokens
+# `active_counted` (coluna B / raw_name), nunca a tabela legada
+# `desafio_registros_coach`.
 # ---------------------------------------------------------------------------
 
 
-class TestNenhumaContribuicaoDeCoachNessesRelatorios:
-    """Simétrico ao que a Task 6 já garantiu para o total individual de coach:
-    o Task 8 só recalcula o lado clã. `get_tipo_coach_totals('desafios')` e
-    `get_period_desafio_coach_totals` continuam lendo as tabelas legadas
-    (`desafios` + `desafio_registros_coach`) e nunca tocam
-    `desafio_submissions_current`."""
+class TestGetTipoCoachTotalsDesafiosLeDosTokens:
+    """Fase 2: get_tipo_coach_totals('desafios') e get_period_desafio_coach_totals
+    agregam os tokens active_counted de desafio_submissions_current por coach
+    canônico (coluna B / raw_name), e nunca tocam a tabela legada
+    desafio_registros_coach."""
 
-    def test_get_tipo_coach_totals_desafios_nao_usa_desafio_submissions_current(self):
-        client = MagicMock()
-        result_desafios = MagicMock()
-        result_desafios.data = [{"id": 1}]
-        chain_desafios = MagicMock()
-        chain_desafios.execute.return_value = result_desafios
-        for m in ("table", "select", "eq"):
-            getattr(chain_desafios, m).return_value = chain_desafios
+    def _rows(self):
+        return [
+            {"token": "T1", "raw_name": "Ana Albertim", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-05-10T13:00:00-03:00"},
+            {"token": "T2", "raw_name": "ana  albertim", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-05-20T13:00:00-03:00"},
+            {"token": "T3", "raw_name": "Bruno Costa", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-06-01T13:00:00-03:00"},
+            {"token": "T4", "raw_name": "", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-05-15T13:00:00-03:00"},
+        ]
 
-        result_registros = MagicMock()
-        result_registros.data = [{"coach": "Ana Albertim", "total_pontos": 20}]
-        chain_registros = MagicMock()
-        chain_registros.execute.return_value = result_registros
-        for m in ("table", "select", "in_"):
-            getattr(chain_registros, m).return_value = chain_registros
-
-        client.table.side_effect = [chain_desafios, chain_registros]
-
-        with patch("supabase_client._get_client", return_value=client), \
-             patch(
-                 "supabase_client.fetch_active_counted_desafio_submissions",
-                 side_effect=AssertionError(
-                     "get_tipo_coach_totals não deveria consultar desafio_submissions_current"
-                 ),
-             ):
+    def test_sem_data_soma_todos_agrupando_por_canonico(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=self._rows()), \
+             patch("supabase_client.get_coach_alias_map",
+                   return_value={"ana albertim": "Ana Albertim"}):
             result = supabase_client.get_tipo_coach_totals("desafios")
+        assert result == {"Ana Albertim": 20, "Bruno Costa": 10}
 
+    def test_raw_name_vazio_e_ignorado(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=[{"token": "X", "raw_name": "   ", "points": 10,
+                                  "status": "active_counted",
+                                  "submitted_at": "2026-05-10T13:00:00-03:00"}]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}):
+            assert supabase_client.get_tipo_coach_totals("desafios") == {}
+
+    def test_com_data_delega_e_filtra_por_submitted_at_local(self):
+        from datetime import date
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=self._rows()), \
+             patch("supabase_client.get_coach_alias_map",
+                   return_value={"ana albertim": "Ana Albertim"}):
+            result = supabase_client.get_tipo_coach_totals(
+                "desafios", date(2026, 5, 1), date(2026, 5, 31)
+            )
         assert result == {"Ana Albertim": 20}
 
-    def test_get_period_desafio_coach_totals_nao_usa_desafio_submissions_current(self):
+    def test_periodo_sem_fim_conta_tudo_a_partir_do_inicio(self):
         from datetime import date
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=self._rows()), \
+             patch("supabase_client.get_coach_alias_map",
+                   return_value={"ana albertim": "Ana Albertim"}):
+            result = supabase_client.get_period_desafio_coach_totals(date(2026, 6, 1), None)
+        assert result == {"Bruno Costa": 10}
 
-        client = MagicMock()
-        result_desafios = MagicMock()
-        result_desafios.data = [{"id": 1}]
-        chain_desafios = MagicMock()
-        chain_desafios.execute.return_value = result_desafios
-        for m in ("table", "select", "gte", "lte", "eq"):
-            getattr(chain_desafios, m).return_value = chain_desafios
+    def test_nunca_consulta_desafio_registros_coach(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=self._rows()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client._get_client",
+                   side_effect=AssertionError("não deve tocar o banco legado")):
+            supabase_client.get_tipo_coach_totals("desafios")
 
-        result_registros = MagicMock()
-        result_registros.data = [{"coach": "Ana Albertim", "total_pontos": 15}]
-        chain_registros = MagicMock()
-        chain_registros.execute.return_value = result_registros
-        for m in ("table", "select", "in_"):
-            getattr(chain_registros, m).return_value = chain_registros
 
-        client.table.side_effect = [chain_desafios, chain_registros]
+class TestGetAllDesafioTokenCoachNames:
 
-        with patch("supabase_client._get_client", return_value=client), \
-             patch(
-                 "supabase_client.fetch_active_counted_desafio_submissions",
-                 side_effect=AssertionError(
-                     "get_period_desafio_coach_totals não deveria consultar desafio_submissions_current"
-                 ),
-             ):
-            result = supabase_client.get_period_desafio_coach_totals(date(2026, 5, 1), date(2026, 5, 31))
-
-        assert result == {"Ana Albertim": 15}
+    def test_nomes_brutos_distintos_nao_vazios(self):
+        rows = [
+            {"token": "A", "raw_name": "Ana", "points": 10, "status": "active_counted"},
+            {"token": "B", "raw_name": "Ana", "points": 10, "status": "active_counted"},
+            {"token": "C", "raw_name": "  Bruno  ", "points": 10, "status": "active_counted"},
+            {"token": "D", "raw_name": "", "points": 10, "status": "active_counted"},
+        ]
+        with patch("supabase_client.fetch_active_counted_desafio_submissions", return_value=rows):
+            assert supabase_client.get_all_desafio_token_coach_names() == {"Ana", "Bruno"}
 
 
 # ---------------------------------------------------------------------------

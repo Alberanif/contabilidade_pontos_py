@@ -66,6 +66,10 @@ export default function SubmissionDetail({ submissao, onShowVersions, onOpenSync
 
         <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm" data-testid="current-state">
           <div>
+            <dt className="text-gray-500">Coach</dt>
+            <dd className="font-medium text-gray-800">{submissao.coach ?? "—"}</dd>
+          </div>
+          <div>
             <dt className="text-gray-500">Clã</dt>
             <dd className="font-medium text-gray-800">{submissao.clan ?? "—"}</dd>
           </div>

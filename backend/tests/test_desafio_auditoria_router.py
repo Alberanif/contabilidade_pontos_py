@@ -17,6 +17,7 @@ import os
 import sys
 import typing
 from datetime import date, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
@@ -252,6 +253,7 @@ class TestObterDesafio:
 
     def test_desafio_existente_inclui_totais_por_clan(self):
         with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_desafio_coach_totals", return_value={}), \
              patch("supabase_client.get_desafio_clan_totals", return_value={"CLÃ 1": 30}) as mock_totais:
             response = client.get("/api/desafios/1")
         assert response.status_code == 200
@@ -264,6 +266,17 @@ class TestObterDesafio:
             response = client.get("/api/desafios/999")
         assert response.status_code == 404
         assert "não encontrado" in response.json()["detail"].lower()
+
+    def test_obter_desafio_inclui_pontos_por_coach(self):
+        with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_desafio_clan_totals", return_value={}), \
+             patch(
+                 "supabase_client.get_desafio_coach_totals", return_value={"Ana": 20}
+             ) as mock_coach:
+            response = client.get("/api/desafios/1")
+        assert response.status_code == 200
+        assert response.json()["pontos_por_coach"] == {"Ana": 20}
+        mock_coach.assert_called_once_with(1)
 
 
 # --- GET /api/desafios/{id}/submissoes ---
@@ -278,6 +291,7 @@ class TestListarSubmissoesDoDesafio:
 
     def test_filtros_combinados_e_paginacao_sao_repassados(self):
         with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch(
                  "supabase_client.list_desafio_submissions_current", return_value=[_submission()]
              ) as mock_list:
@@ -292,6 +306,7 @@ class TestListarSubmissoesDoDesafio:
 
     def test_paginacao_default_bate_com_o_helper(self):
         with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.list_desafio_submissions_current", return_value=[]) as mock_list:
             client.get("/api/desafios/1/submissoes")
         mock_list.assert_called_once_with(desafio_id=1, clan=None, status=None, limit=100, offset=0)
@@ -303,7 +318,8 @@ class TestListarSubmissoesDoDesafio:
 class TestObterSubmissao:
 
     def test_token_existente(self):
-        with patch("supabase_client.get_desafio_submission_current", return_value=_submission()):
+        with patch("supabase_client.get_desafio_submission_current", return_value=_submission()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}):
             response = client.get("/api/desafios/submissoes/TOK-1")
         assert response.status_code == 200
         assert response.json()["token"] == "TOK-1"
@@ -312,6 +328,27 @@ class TestObterSubmissao:
         with patch("supabase_client.get_desafio_submission_current", return_value=None):
             response = client.get("/api/desafios/submissoes/TOK-DESCONHECIDO")
         assert response.status_code == 404
+
+    def test_obter_submissao_inclui_coach_canonico(self):
+        with patch(
+            "supabase_client.get_desafio_submission_current",
+            return_value=_submission(raw_name="vini marini"),
+        ), patch(
+            "supabase_client.get_coach_alias_map",
+            return_value={"vini marini": "Vinicius Marini"},
+        ):
+            response = client.get("/api/desafios/submissoes/TOK-1")
+        assert response.status_code == 200
+        assert response.json()["coach"] == "Vinicius Marini"
+
+    def test_obter_submissao_sem_raw_name_tem_coach_none(self):
+        with patch(
+            "supabase_client.get_desafio_submission_current",
+            return_value=_submission(raw_name=""),
+        ), patch("supabase_client.get_coach_alias_map", return_value={}):
+            response = client.get("/api/desafios/submissoes/TOK-1")
+        assert response.status_code == 200
+        assert response.json()["coach"] is None
 
 
 # --- GET /api/desafios/submissoes/{token}/versoes ---
@@ -328,15 +365,31 @@ class TestListarVersoesSubmissao:
 
     def test_token_existente_com_versoes(self):
         with patch("supabase_client.get_desafio_submission_current", return_value=_submission()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.list_desafio_submission_versions", return_value=[_version()]):
             response = client.get("/api/desafios/submissoes/TOK-1/versoes")
         assert response.status_code == 200
         assert len(response.json()) == 1
         assert response.json()[0]["change_reason"] == "new"
 
+    def test_listar_versoes_inclui_coach_canonico_por_linha(self):
+        with patch("supabase_client.get_desafio_submission_current", return_value=_submission()), \
+             patch(
+                 "supabase_client.list_desafio_submission_versions",
+                 return_value=[_version(raw_name="vini marini")],
+             ), \
+             patch(
+                 "supabase_client.get_coach_alias_map",
+                 return_value={"vini marini": "Vinicius Marini"},
+             ):
+            response = client.get("/api/desafios/submissoes/TOK-1/versoes")
+        assert response.status_code == 200
+        assert response.json()[0]["coach"] == "Vinicius Marini"
+
     def test_token_existente_sem_versoes_nao_e_404(self):
         """Lista vazia para um token real é 200 com [] — só token desconhecido é 404."""
         with patch("supabase_client.get_desafio_submission_current", return_value=_submission()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.list_desafio_submission_versions", return_value=[]):
             response = client.get("/api/desafios/submissoes/TOK-1/versoes")
         assert response.status_code == 200
@@ -398,7 +451,8 @@ class TestOrdenacaoDeRotasNaoColide:
         token, não em listar_submissoes_do_desafio(desafio_id="submissoes")."""
         with patch(
             "supabase_client.get_desafio_submission_current", return_value=_submission()
-        ) as mock_token, patch("supabase_client.get_desafio") as mock_desafio:
+        ) as mock_token, patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.get_desafio") as mock_desafio:
             response = client.get("/api/desafios/submissoes/TOK-1")
         assert response.status_code == 200
         mock_token.assert_called_once_with("TOK-1")
@@ -406,6 +460,7 @@ class TestOrdenacaoDeRotasNaoColide:
 
     def test_desafio_id_numerico_ainda_funciona(self):
         with patch("supabase_client.get_desafio", return_value=_desafio(id=42)), \
+             patch("supabase_client.get_desafio_coach_totals", return_value={}), \
              patch("supabase_client.get_desafio_clan_totals", return_value={}):
             response = client.get("/api/desafios/42")
         assert response.status_code == 200
@@ -416,3 +471,33 @@ class TestOrdenacaoDeRotasNaoColide:
         nenhuma rota registrada (nem vira desafio_id="texto")."""
         response = client.get("/api/desafios/nao-e-um-id")
         assert response.status_code == 404
+
+
+def test_get_desafio_coach_totals_agrupa_por_canonico(monkeypatch):
+    import supabase_client
+
+    class _Chain:
+        def __init__(self, data):
+            self._data = data
+
+        def select(self, *_):
+            return self
+
+        def eq(self, *_):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=self._data)
+
+    rows = [
+        {"raw_name": "Ana", "points": 10},
+        {"raw_name": "ana", "points": 10},
+        {"raw_name": "", "points": 10},
+    ]
+    monkeypatch.setattr(
+        supabase_client,
+        "_get_client",
+        lambda: SimpleNamespace(table=lambda _t: _Chain(rows)),
+    )
+    monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {"ana": "Ana"})
+    assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 20}

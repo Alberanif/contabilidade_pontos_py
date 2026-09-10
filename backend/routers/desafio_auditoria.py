@@ -22,6 +22,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+import coach_identity
 import supabase_client
 
 router = APIRouter()
@@ -48,6 +49,7 @@ class DesafioResponse(BaseModel):
 
 class DesafioDetailResponse(DesafioResponse):
     pontos_por_clan: dict[str, int] = {}
+    pontos_por_coach: dict[str, int] = {}
 
 
 class DesafioSubmissionResponse(BaseModel):
@@ -56,6 +58,7 @@ class DesafioSubmissionResponse(BaseModel):
     raw_cells: list[Any] = []
     raw_clan_legacy: str | None = None
     raw_name: str | None = None
+    coach: str | None = None
     raw_validation: str | None = None
     raw_link: str | None = None
     raw_observation: str | None = None
@@ -87,6 +90,7 @@ class DesafioSubmissionVersionResponse(BaseModel):
     raw_cells: list[Any] = []
     raw_clan_legacy: str | None = None
     raw_name: str | None = None
+    coach: str | None = None
     raw_validation: str | None = None
     raw_link: str | None = None
     raw_observation: str | None = None
@@ -137,6 +141,14 @@ def _status_filtro_banco(status: Literal["active", "archived", "all"]) -> str | 
     return _STATUS_PARA_BANCO[status]
 
 
+def _com_coach(row: dict, alias_map: dict[str, str]) -> dict:
+    """Injeta `coach` (nome canônico da coluna B) numa linha de submissão/versão.
+    `raw_name` vazio → `coach` None (não vira "DESCONHECIDO")."""
+    nome = (row.get("raw_name") or "").strip()
+    row["coach"] = coach_identity.resolve_coach(nome, alias_map) if nome else None
+    return row
+
+
 # --- Rotas: desafios ---
 
 
@@ -176,7 +188,7 @@ def obter_submissao(token: str):
     submissao = supabase_client.get_desafio_submission_current(token)
     if not submissao:
         raise HTTPException(status_code=404, detail="Token de submissão não encontrado")
-    return submissao
+    return _com_coach(submissao, supabase_client.get_coach_alias_map())
 
 
 @router.get(
@@ -190,7 +202,11 @@ def listar_versoes_submissao(token: str):
     submissao = supabase_client.get_desafio_submission_current(token)
     if not submissao:
         raise HTTPException(status_code=404, detail="Token de submissão não encontrado")
-    return supabase_client.list_desafio_submission_versions(token)
+    alias_map = supabase_client.get_coach_alias_map()
+    return [
+        _com_coach(v, alias_map)
+        for v in supabase_client.list_desafio_submission_versions(token)
+    ]
 
 
 # --- Rotas genéricas: /{desafio_id}... (registradas por último) ---
@@ -202,8 +218,11 @@ def obter_desafio(desafio_id: int):
     desafio = supabase_client.get_desafio(desafio_id)
     if not desafio:
         raise HTTPException(status_code=404, detail="Desafio não encontrado")
-    pontos_por_clan = supabase_client.get_desafio_clan_totals(desafio_id)
-    return {**desafio, "pontos_por_clan": pontos_por_clan}
+    return {
+        **desafio,
+        "pontos_por_clan": supabase_client.get_desafio_clan_totals(desafio_id),
+        "pontos_por_coach": supabase_client.get_desafio_coach_totals(desafio_id),
+    }
 
 
 @router.get("/{desafio_id:int}/submissoes", response_model=list[DesafioSubmissionResponse])
@@ -218,6 +237,10 @@ def listar_submissoes_do_desafio(
     desafio = supabase_client.get_desafio(desafio_id)
     if not desafio:
         raise HTTPException(status_code=404, detail="Desafio não encontrado")
-    return supabase_client.list_desafio_submissions_current(
-        desafio_id=desafio_id, clan=clan, status=status, limit=limit, offset=offset
-    )
+    alias_map = supabase_client.get_coach_alias_map()
+    return [
+        _com_coach(s, alias_map)
+        for s in supabase_client.list_desafio_submissions_current(
+            desafio_id=desafio_id, clan=clan, status=status, limit=limit, offset=offset
+        )
+    ]

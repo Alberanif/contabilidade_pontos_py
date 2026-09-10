@@ -154,7 +154,9 @@ class TestConfirmarDesafiosEndpoint:
         with patch(
             "desafio_sync_service.sync_desafios",
             return_value=_desafios_ok(status="success"),
-        ) as mock_sync:
+        ) as mock_sync, patch(
+            "routers.contabilidade._refresh_desafio_coach_totals"
+        ):
             result = confirmar_desafios(
                 ConfirmarDesafiosRequest(
                     snapshot_hash="hash-abc",

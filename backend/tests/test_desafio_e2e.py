@@ -9,7 +9,7 @@ Cobre de ponta a ponta todos os critérios de aceitação (CA-01 a CA-22 do PRD)
 6. Arquivamento e reativação de desafios
 7. Guardas operacionais (planilha vazia, estorno >20%)
 8. Idempotência (delta zero em reexecução)
-9. Ausência total de pontuação por coach em desafios
+9. Motor de reconciliação sem coach_deltas (identidade de coach resolvida em leitura — Fase 2)
 10. Desativação de endpoints legados de escrita (410 Gone)
 11. Preservação e integridade do histórico imutável por token
 """
@@ -256,8 +256,9 @@ class TestCriteriosDeAceitacaoPRD11:
 
         assert result.status == "awaiting_confirmation"
 
-    def test_ca13_nenhum_ponto_de_desafio_atribuido_a_coaches(self):
-        # Verifica que o plano e o RPC tratam apenas clan_deltas e não interagem com totais de coach
+    def test_ca13_reconciliacao_nao_produz_coach_deltas(self):
+        # Fase 2: a identidade de coach é resolvida em tempo de leitura, o motor de
+        # reconciliação segue só com clan_deltas
         raw = [
             ["Clã (legado)", "Nome", "Validado", "Link", "Obs", "Desafio", "Clã atual", "Enviado em", "Token"],
             ["1", "Coach Fulano", "Sim", "", "", "Desafio A", "", "19/08/2026 10:00:00", "TOK-COACH-1"],
@@ -267,7 +268,7 @@ class TestCriteriosDeAceitacaoPRD11:
         plan = reconcile_desafios(snapshot, {})
 
         assert hasattr(plan, "clan_deltas")
-        assert not hasattr(plan, "coach_deltas")  # RF-08: sem pontos para coaches nesta fase
+        assert not hasattr(plan, "coach_deltas")  # Fase 2: identidade resolvida em leitura, motor só com clan_deltas
 
     def test_ca14_apis_legadas_retornam_410_gone(self):
         client = TestClient(app)
@@ -312,3 +313,74 @@ class TestCriteriosDeAceitacaoPRD11:
         assert preview.sheet_row_count == 2
         assert preview.eligible_tokens == 1
         assert preview.expected_clan_points["CLÃ 1"] == 10
+
+    def test_fase2_pontos_de_desafio_no_total_do_coach_via_executar(self):
+        """Spec §6.2 (e2e): um token elegível cuja coluna B é um coach conhecido,
+        aplicado via `POST /api/contabilidade/executar`, faz o refresh recompor
+        `totais_por_coach.total_pontos` somando a fatia de +10 de desafio — sem
+        que ela entre em `total_pagante`/`total_pro_bono`."""
+        client = TestClient(app)
+
+        sheet_desafios = [
+            ["Clã (legado)", "Nome", "Validado", "Link", "Obs", "Desafio", "Clã atual", "Enviado em", "Token"],
+            ["1", "Bruno Costa", "Sim", "", "", "Desafio A", "", "19/08/2026 10:00:00", "TOK-BRUNO-1"],
+        ]
+
+        def mock_call_rpc(rpc_name, params):
+            if rpc_name == "apply_desafio_reconciliation":
+                return {
+                    "status": "applied",
+                    "run_id": 42,
+                    "snapshot_hash": "hash-e2e",
+                    "sheet_row_count": 1,
+                    "state_counts": {"new": 1},
+                    "clan_deltas": {"CLÃ 1": 10},
+                    "clan_totals_after": {"CLÃ 1": 10},
+                    "challenge_transitions": [],
+                    "challenges_created": 1,
+                    "challenges_archived": 0,
+                    "challenges_reactivated": 0,
+                    "tokens_versioned": 1,
+                    "started_at": "2026-08-31T10:00:00-03:00",
+                    "finished_at": "2026-08-31T10:00:01-03:00",
+                }
+            return {}
+
+        # O que o refresh lê depois de aplicar: o token do Bruno já active_counted.
+        active_tokens = [
+            {"token": "TOK-BRUNO-1", "raw_name": "Bruno Costa", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-08-19T13:00:00-03:00"},
+        ]
+        coach_totals_before = [
+            {"coach": "Bruno Costa", "total_pontos": 0, "total_pagante": 0,
+             "total_pro_bono": 0, "pessoas_em_espera": 0},
+        ]
+        upserts: list[tuple] = []
+
+        with patch("google_sheets_client.fetch_desafio_records", return_value=sheet_desafios), \
+             patch("desafio_reconciliation_store.get_current_desafio_submissions", return_value={}), \
+             patch("supabase_client.call_rpc", side_effect=mock_call_rpc), \
+             patch("google_sheets_client.fetch_records", return_value=[["h"]]), \
+             patch("google_sheets_client.fetch_records_pro_bono", return_value=None), \
+             patch("supabase_client.get_processed_hashes", return_value=set()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.get_all_pending_clans", return_value=[]), \
+             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
+             patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=active_tokens), \
+             patch("supabase_client.list_coach_totals", return_value=coach_totals_before), \
+             patch("supabase_client.upsert_coach_total",
+                   side_effect=lambda *a, **kw: upserts.append((a, kw))):
+            resp = client.post("/api/contabilidade/executar")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["desafios"]["status"] == "success"
+        assert body["desafios"]["tokens_versioned"] == 1
+
+        bruno = [(a, kw) for a, kw in upserts if a[0] == "Bruno Costa"]
+        assert bruno, f"refresh não reescreveu o total do coach: {upserts!r}"
+        args, kwargs = bruno[-1]
+        assert args[1] == 10  # total_pontos = 0 pagante + 0 pro-bono + 10 desafio
+        assert kwargs["total_pagante"] == 0
+        assert kwargs["total_pro_bono"] == 0

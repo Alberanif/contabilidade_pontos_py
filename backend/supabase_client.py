@@ -748,6 +748,28 @@ def get_desafio_clan_totals(desafio_id: int) -> dict[str, int]:
     return totals
 
 
+def get_desafio_coach_totals(desafio_id: int) -> dict[str, int]:
+    """Soma os pontos das submissões `active_counted` de um desafio, agrupadas
+    pelo coach canônico (coluna B / `raw_name` resolvida via
+    `pontos_ultimate_coach_aliases`). Espelha `get_desafio_clan_totals` no eixo
+    coach (Fase 2)."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+        .select("raw_name, points")
+        .eq("desafio_id", desafio_id)
+        .eq("status", "active_counted")
+        .execute()
+    )
+    raw: dict[str, int] = {}
+    for row in result.data:
+        name = (row.get("raw_name") or "").strip()
+        if not name:
+            continue
+        raw[name] = raw.get(name, 0) + (row.get("points") or 0)
+    return coach_identity.aggregate_by_canonical(raw, get_coach_alias_map())
+
+
 def update_desafio(
     desafio_id: int,
     nome: str,

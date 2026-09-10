@@ -17,6 +17,7 @@ import os
 import sys
 import typing
 from datetime import date, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
@@ -416,3 +417,33 @@ class TestOrdenacaoDeRotasNaoColide:
         nenhuma rota registrada (nem vira desafio_id="texto")."""
         response = client.get("/api/desafios/nao-e-um-id")
         assert response.status_code == 404
+
+
+def test_get_desafio_coach_totals_agrupa_por_canonico(monkeypatch):
+    import supabase_client
+
+    class _Chain:
+        def __init__(self, data):
+            self._data = data
+
+        def select(self, *_):
+            return self
+
+        def eq(self, *_):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=self._data)
+
+    rows = [
+        {"raw_name": "Ana", "points": 10},
+        {"raw_name": "ana", "points": 10},
+        {"raw_name": "", "points": 10},
+    ]
+    monkeypatch.setattr(
+        supabase_client,
+        "_get_client",
+        lambda: SimpleNamespace(table=lambda _t: _Chain(rows)),
+    )
+    monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {"ana": "Ana"})
+    assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 20}

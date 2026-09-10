@@ -314,25 +314,73 @@ class TestCriteriosDeAceitacaoPRD11:
         assert preview.eligible_tokens == 1
         assert preview.expected_clan_points["CLÃ 1"] == 10
 
-    def test_fase2_pontos_de_desafio_no_total_e_no_periodo_do_coach(self):
-        import supabase_client
-        from datetime import date
+    def test_fase2_pontos_de_desafio_no_total_do_coach_via_executar(self):
+        """Spec §6.2 (e2e): um token elegível cuja coluna B é um coach conhecido,
+        aplicado via `POST /api/contabilidade/executar`, faz o refresh recompor
+        `totais_por_coach.total_pontos` somando a fatia de +10 de desafio — sem
+        que ela entre em `total_pagante`/`total_pro_bono`."""
+        client = TestClient(app)
 
-        tokens = [
-            {"token": "TOK-A", "raw_name": "Vini Marini", "points": 10,
-             "status": "active_counted", "submitted_at": "2026-05-10T13:00:00-03:00"},
-            {"token": "TOK-B", "raw_name": "vinicius marini", "points": 10,
-             "status": "active_counted", "submitted_at": "2026-06-10T13:00:00-03:00"},
+        sheet_desafios = [
+            ["Clã (legado)", "Nome", "Validado", "Link", "Obs", "Desafio", "Clã atual", "Enviado em", "Token"],
+            ["1", "Bruno Costa", "Sim", "", "", "Desafio A", "", "19/08/2026 10:00:00", "TOK-BRUNO-1"],
         ]
-        with patch("supabase_client.fetch_active_counted_desafio_submissions",
-                   return_value=tokens), \
-             patch("supabase_client.get_coach_alias_map",
-                   return_value={"vini marini": "Vinicius Marini",
-                                 "vinicius marini": "Vinicius Marini"}):
-            total = supabase_client.get_tipo_coach_totals("desafios")
-            maio = supabase_client.get_period_desafio_coach_totals(
-                date(2026, 5, 1), date(2026, 5, 31)
-            )
 
-        assert total == {"Vinicius Marini": 20}
-        assert maio == {"Vinicius Marini": 10}
+        def mock_call_rpc(rpc_name, params):
+            if rpc_name == "apply_desafio_reconciliation":
+                return {
+                    "status": "applied",
+                    "run_id": 42,
+                    "snapshot_hash": "hash-e2e",
+                    "sheet_row_count": 1,
+                    "state_counts": {"new": 1},
+                    "clan_deltas": {"CLÃ 1": 10},
+                    "clan_totals_after": {"CLÃ 1": 10},
+                    "challenge_transitions": [],
+                    "challenges_created": 1,
+                    "challenges_archived": 0,
+                    "challenges_reactivated": 0,
+                    "tokens_versioned": 1,
+                    "started_at": "2026-08-31T10:00:00-03:00",
+                    "finished_at": "2026-08-31T10:00:01-03:00",
+                }
+            return {}
+
+        # O que o refresh lê depois de aplicar: o token do Bruno já active_counted.
+        active_tokens = [
+            {"token": "TOK-BRUNO-1", "raw_name": "Bruno Costa", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-08-19T13:00:00-03:00"},
+        ]
+        coach_totals_before = [
+            {"coach": "Bruno Costa", "total_pontos": 0, "total_pagante": 0,
+             "total_pro_bono": 0, "pessoas_em_espera": 0},
+        ]
+        upserts: list[tuple] = []
+
+        with patch("google_sheets_client.fetch_desafio_records", return_value=sheet_desafios), \
+             patch("desafio_reconciliation_store.get_current_desafio_submissions", return_value={}), \
+             patch("supabase_client.call_rpc", side_effect=mock_call_rpc), \
+             patch("google_sheets_client.fetch_records", return_value=[["h"]]), \
+             patch("google_sheets_client.fetch_records_pro_bono", return_value=None), \
+             patch("supabase_client.get_processed_hashes", return_value=set()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.get_all_pending_clans", return_value=[]), \
+             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
+             patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=active_tokens), \
+             patch("supabase_client.list_coach_totals", return_value=coach_totals_before), \
+             patch("supabase_client.upsert_coach_total",
+                   side_effect=lambda *a, **kw: upserts.append((a, kw))):
+            resp = client.post("/api/contabilidade/executar")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["desafios"]["status"] == "success"
+        assert body["desafios"]["tokens_versioned"] == 1
+
+        bruno = [(a, kw) for a, kw in upserts if a[0] == "Bruno Costa"]
+        assert bruno, f"refresh não reescreveu o total do coach: {upserts!r}"
+        args, kwargs = bruno[-1]
+        assert args[1] == 10  # total_pontos = 0 pagante + 0 pro-bono + 10 desafio
+        assert kwargs["total_pagante"] == 0
+        assert kwargs["total_pro_bono"] == 0

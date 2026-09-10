@@ -571,9 +571,15 @@ def _refresh_desafio_coach_totals() -> None:
         row = existentes.get(coach, {})
         pagante = row.get("total_pagante") or 0
         pro_bono = row.get("total_pro_bono") or 0
+        novo_total = pagante + pro_bono + desafio_coach.get(coach, 0)
+        # Idempotência: só escreve coaches novos ou cujo total de fato mudou —
+        # evita dezenas de writes sequenciais no caminho quente de /executar e
+        # reduz a janela de lost-update contra POST /aprovar-coach.
+        if coach in existentes and (row.get("total_pontos") or 0) == novo_total:
+            continue
         supabase_client.upsert_coach_total(
             coach,
-            pagante + pro_bono + desafio_coach.get(coach, 0),
+            novo_total,
             pessoas_em_espera=row.get("pessoas_em_espera") or 0,
             total_pagante=pagante,
             total_pro_bono=pro_bono,
@@ -630,7 +636,12 @@ def sugerir_aliases_llm():
         totais = supabase_client.list_coach_totals()
         if totais:
             raw_coaches |= {t["coach"] for t in totais if t.get("coach")}
-        raw_coaches |= supabase_client.get_all_desafio_token_coach_names()
+
+        # Nomes da coluna B da planilha de desafios são texto livre do usuário final
+        # (qualidade menor que a planilha de pagantes): PRECISAM ser resolvidos, mas
+        # NUNCA podem entrar em `canonical_list` — um typo como "Vinicious Marinni"
+        # não pode virar alvo canônico que o LLM escolhe e auto-aprova a >=95%.
+        nomes_para_resolver = raw_coaches | supabase_client.get_all_desafio_token_coach_names()
 
         canonical_list = sorted(list(set(alias_map.values()) | raw_coaches))
 
@@ -638,7 +649,7 @@ def sugerir_aliases_llm():
         # 1. Não estão no alias_map como chave
         # 2. Não possuem correspondência de chave no alias_map
         unmapped_coaches = []
-        for raw in raw_coaches:
+        for raw in nomes_para_resolver:
             if raw in alias_map:
                 continue
             if coach_identity.normalize_key(raw) in alias_keys_norm:
@@ -646,7 +657,7 @@ def sugerir_aliases_llm():
             unmapped_coaches.append(raw)
 
 
-        print(f"[IA COACHES] Analisando {len(unmapped_coaches)} candidato(s) inéditos de um total de {len(raw_coaches)} nomes na base.")
+        print(f"[IA COACHES] Analisando {len(unmapped_coaches)} candidato(s) inéditos de um total de {len(nomes_para_resolver)} nomes na base.")
 
         if not unmapped_coaches:
             return SugerirAliasesLLMResponse(

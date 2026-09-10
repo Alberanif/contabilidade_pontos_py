@@ -45,6 +45,7 @@ class TestReprocessarContabilidadeIncluiDesafio:
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \
              patch("supabase_client.get_tipo_coach_totals",
                    return_value={"Ana Albertim": 40}) as mock_tipo_coach, \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.upsert_clan_total"), \
              patch("supabase_client.upsert_coach_total") as mock_upsert_coach:
             from routers.contabilidade import reprocessar_contabilidade

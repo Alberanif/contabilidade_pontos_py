@@ -9,7 +9,7 @@ Cobre de ponta a ponta todos os critérios de aceitação (CA-01 a CA-22 do PRD)
 6. Arquivamento e reativação de desafios
 7. Guardas operacionais (planilha vazia, estorno >20%)
 8. Idempotência (delta zero em reexecução)
-9. Ausência total de pontuação por coach em desafios
+9. Motor de reconciliação sem coach_deltas (identidade de coach resolvida em leitura — Fase 2)
 10. Desativação de endpoints legados de escrita (410 Gone)
 11. Preservação e integridade do histórico imutável por token
 """
@@ -256,8 +256,9 @@ class TestCriteriosDeAceitacaoPRD11:
 
         assert result.status == "awaiting_confirmation"
 
-    def test_ca13_nenhum_ponto_de_desafio_atribuido_a_coaches(self):
-        # Verifica que o plano e o RPC tratam apenas clan_deltas e não interagem com totais de coach
+    def test_ca13_reconciliacao_nao_produz_coach_deltas(self):
+        # Fase 2: a identidade de coach é resolvida em tempo de leitura, o motor de
+        # reconciliação segue só com clan_deltas
         raw = [
             ["Clã (legado)", "Nome", "Validado", "Link", "Obs", "Desafio", "Clã atual", "Enviado em", "Token"],
             ["1", "Coach Fulano", "Sim", "", "", "Desafio A", "", "19/08/2026 10:00:00", "TOK-COACH-1"],
@@ -267,7 +268,7 @@ class TestCriteriosDeAceitacaoPRD11:
         plan = reconcile_desafios(snapshot, {})
 
         assert hasattr(plan, "clan_deltas")
-        assert not hasattr(plan, "coach_deltas")  # RF-08: sem pontos para coaches nesta fase
+        assert not hasattr(plan, "coach_deltas")  # Fase 2: identidade resolvida em leitura, motor só com clan_deltas
 
     def test_ca14_apis_legadas_retornam_410_gone(self):
         client = TestClient(app)
@@ -312,3 +313,26 @@ class TestCriteriosDeAceitacaoPRD11:
         assert preview.sheet_row_count == 2
         assert preview.eligible_tokens == 1
         assert preview.expected_clan_points["CLÃ 1"] == 10
+
+    def test_fase2_pontos_de_desafio_no_total_e_no_periodo_do_coach(self):
+        import supabase_client
+        from datetime import date
+
+        tokens = [
+            {"token": "TOK-A", "raw_name": "Vini Marini", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-05-10T13:00:00-03:00"},
+            {"token": "TOK-B", "raw_name": "vinicius marini", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-06-10T13:00:00-03:00"},
+        ]
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=tokens), \
+             patch("supabase_client.get_coach_alias_map",
+                   return_value={"vini marini": "Vinicius Marini",
+                                 "vinicius marini": "Vinicius Marini"}):
+            total = supabase_client.get_tipo_coach_totals("desafios")
+            maio = supabase_client.get_period_desafio_coach_totals(
+                date(2026, 5, 1), date(2026, 5, 31)
+            )
+
+        assert total == {"Vinicius Marini": 20}
+        assert maio == {"Vinicius Marini": 10}

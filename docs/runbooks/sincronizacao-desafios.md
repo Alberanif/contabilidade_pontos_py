@@ -401,3 +401,32 @@ mudar, atualizar tanto este runbook quanto o de migração.
 - PRD: `docs/superpowers/specs/2026-08-19-contabilidade-desafios-google-sheets-prd.md`
   (RF-17 remoção em massa, RF-18 planilha vazia, RF-19 total negativo, seção
   19 retenção).
+
+## Fase 2 — pontos de desafio para coaches
+
+A partir da Fase 2, cada token `active_counted` também pontua para o **coach**
+(coluna B da planilha, resolvida ao nome canônico via
+`pontos_ultimate_coach_aliases`). Não há schema novo nem migração de banco.
+
+### Após o deploy da Fase 2
+
+1. Garanta que a Fase 1 já foi migrada e que houve ao menos uma sincronização
+   bem-sucedida (`POST /api/contabilidade/executar`) — senão o backfill vem zerado.
+2. Rode **uma vez** `POST /api/contabilidade/reprocessar`. Ele reconstrói todos
+   os totais do zero e passa a somar `get_tipo_coach_totals("desafios")` no total
+   de cada coach. `reprocessar-coaches` sozinho **não** serve de backfill (só
+   cobre coaches afetados por mudança de alias).
+3. Validação: para cada desafio, a soma de `pontos_por_coach` (em
+   `GET /api/desafios/{id}`) deve ser igual a
+   `points_per_submission × (nº de tokens active_counted com coluna B não vazia)`.
+
+### Manutenção contínua
+
+- `POST /api/contabilidade/executar` e `POST /api/contabilidade/confirmar-desafios`
+  recompõem automaticamente a fatia de desafio no total dos coaches ao fim do sync
+  (`_refresh_desafio_coach_totals`).
+- A aba "Desafios" do ranking de Coaches (Dashboard) e `GET /api/contabilidade/totais-por-tipo?tipo=desafios`
+  leem os tokens ao vivo — sempre exatos, mesmo antes de um `/reprocessar`.
+- Um nome de coach com grafia nova na coluna B pontua sob o nome bruto até ser
+  resolvido; ele aparece em `POST /api/contabilidade/sugerir-aliases-llm` e na fila
+  de aliases pendentes.

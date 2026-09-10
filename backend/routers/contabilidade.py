@@ -558,6 +558,28 @@ def reprocessar_coaches():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _refresh_desafio_coach_totals() -> None:
+    """Recompõe `totais_por_coach.total_pontos` incluindo a fatia de desafio
+    lida ao vivo dos tokens (`get_tipo_coach_totals('desafios')`). Idempotente e
+    auto-corretivo: `total = total_pagante + total_pro_bono + desafio`, iterado
+    sobre todos os coaches (um coach cuja contribuição de desafio caiu a zero
+    também é corrigido). Chamado ao fim de `/executar` e `/confirmar-desafios`;
+    o desafio nunca entra em `total_pagante`/`total_pro_bono`."""
+    desafio_coach = supabase_client.get_tipo_coach_totals("desafios")
+    existentes = {r["coach"]: r for r in supabase_client.list_coach_totals()}
+    for coach in set(existentes.keys()) | set(desafio_coach.keys()):
+        row = existentes.get(coach, {})
+        pagante = row.get("total_pagante") or 0
+        pro_bono = row.get("total_pro_bono") or 0
+        supabase_client.upsert_coach_total(
+            coach,
+            pagante + pro_bono + desafio_coach.get(coach, 0),
+            pessoas_em_espera=row.get("pessoas_em_espera") or 0,
+            total_pagante=pagante,
+            total_pro_bono=pro_bono,
+        )
+
+
 def _sync_desafios_isolado() -> DesafioSyncResult:
     """Sincroniza desafios isolado do restante do `/executar`.
 
@@ -861,6 +883,12 @@ def executar_contabilidade():
         if not partes:
             partes.append("Nenhum novo registro encontrado")
 
+        if desafios_result.status == "success" and desafios_result.tokens_versioned > 0:
+            try:
+                _refresh_desafio_coach_totals()
+            except Exception as e:  # noqa: BLE001 - isolamento: não derruba /executar
+                print(f"[AVISO] Falha ao recompor totais de desafio-coach: {e}")
+
         return ExecutarResponse(
             novos_registros=len(new_records),
             novos_pendentes=novos_pendentes,
@@ -892,10 +920,16 @@ def confirmar_desafios(body: ConfirmarDesafiosRequest):
     e uma nova prévia precisa ser solicitada.
     """
     try:
-        return desafio_sync_service.sync_desafios(
+        result = desafio_sync_service.sync_desafios(
             confirm_snapshot_hash=body.snapshot_hash,
             confirm_mass_removal=body.confirmar_remocao_em_massa,
         )
+        if result.status == "success" and result.tokens_versioned > 0:
+            try:
+                _refresh_desafio_coach_totals()
+            except Exception as e:  # noqa: BLE001
+                print(f"[AVISO] Falha ao recompor totais de desafio-coach: {e}")
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

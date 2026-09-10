@@ -980,9 +980,10 @@ def reprocessar_contabilidade():
                 total_pro_bono=pro_bono_clan_pts.get(clan, 0),
             )
 
+        desafio_totals_coach = supabase_client.get_tipo_coach_totals("desafios")
         totais_finais_coach: dict[str, int] = {}
-        for coach in all_coach_points.keys():
-            total = all_coach_points.get(coach, 0)
+        for coach in set(all_coach_points.keys()) | set(desafio_totals_coach.keys()):
+            total = all_coach_points.get(coach, 0) + desafio_totals_coach.get(coach, 0)
             totais_finais_coach[coach] = total
             supabase_client.upsert_coach_total(
                 coach, total,

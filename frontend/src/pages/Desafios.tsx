@@ -546,6 +546,37 @@ export default function Desafios() {
               )}
             </div>
 
+            <div>
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">Pontos por coach</h4>
+              {Object.keys(desafioDetalhe.pontos_por_coach).length === 0 ? (
+                <p className="text-gray-500 text-sm">Nenhum ponto de coach contabilizado ainda.</p>
+              ) : (
+                <div
+                  className="bg-white rounded-xl border border-gray-200 overflow-hidden"
+                  data-testid="pontos-por-coach"
+                >
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+                        <th className="py-2 px-4 font-medium">Coach</th>
+                        <th className="py-2 px-4 font-medium text-right">Pontos</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(desafioDetalhe.pontos_por_coach).map(([coach, pontos]) => (
+                        <tr key={coach} className="border-b border-gray-100">
+                          <td className="py-2 px-4 font-medium text-gray-700">{coach}</td>
+                          <td className="py-2 px-4 text-right font-bold text-indigo-600">
+                            {pontos.toLocaleString("pt-BR")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
             <DesafioFilters value={filtros} onChange={setFiltros} statusOptions={SUBMISSION_STATUS_OPTIONS} />
 
             <div>
@@ -577,6 +608,7 @@ export default function Desafios() {
                       <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
                         <th className="py-2 px-4 font-medium">Token</th>
                         <th className="py-2 px-4 font-medium">Clã</th>
+                        <th className="py-2 px-4 font-medium">Coach</th>
                         <th className="py-2 px-4 font-medium">Status</th>
                         <th className="py-2 px-4 font-medium text-right">Pontos</th>
                         <th className="py-2 px-4 font-medium">Enviado em</th>
@@ -594,6 +626,7 @@ export default function Desafios() {
                             </button>
                           </td>
                           <td className="py-2 px-4 text-gray-700">{s.clan ?? "—"}</td>
+                          <td className="py-2 px-4 text-gray-700">{s.coach ?? "—"}</td>
                           <td className="py-2 px-4 text-gray-700">
                             {SUBMISSION_STATUS_LABELS[s.status] ?? s.status}
                           </td>

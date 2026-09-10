@@ -54,6 +54,7 @@ function buildDetalhe(overrides: Partial<DesafioAuditoriaDetalhe> = {}): Desafio
   return {
     ...buildDesafio(),
     pontos_por_clan: { "CLÃ 1": 120, "CLÃ 2": 80 },
+    pontos_por_coach: { "Ana Albertim": 40 },
     ...overrides,
   };
 }
@@ -65,6 +66,7 @@ function buildSubmissao(overrides: Partial<DesafioSubmissao> = {}): DesafioSubmi
     raw_cells: ["CLÃ 1", "Fulano", "Sim", "http://link", "obs livre", "Semana de Treinos", "CLÃ 1", "2026-08-05 10:00:00", "tok-abc123"],
     raw_clan_legacy: "CLÃ 1",
     raw_name: "Fulano",
+    coach: "Ana Albertim",
     raw_validation: "Sim",
     raw_link: "http://link",
     raw_observation: "obs livre",
@@ -99,6 +101,7 @@ function buildVersao(overrides: Partial<DesafioSubmissaoVersao> = {}): DesafioSu
     raw_cells: [],
     raw_clan_legacy: "CLÃ 1",
     raw_name: "Fulano",
+    coach: "Ana Albertim",
     raw_validation: "Sim",
     raw_link: "http://link",
     raw_observation: "obs livre",
@@ -244,6 +247,11 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     const pontosPorClan = await screen.findByTestId("pontos-por-clan");
     expect(within(pontosPorClan).getByText("CLÃ 1")).toBeInTheDocument();
     expect(within(pontosPorClan).getByText("120")).toBeInTheDocument();
+
+    const pontosPorCoach = await screen.findByTestId("pontos-por-coach");
+    expect(within(pontosPorCoach).getByText("Ana Albertim")).toBeInTheDocument();
+    expect(within(pontosPorCoach).getByText("40")).toBeInTheDocument();
+
     expect(fetchDesafioAuditoria).toHaveBeenCalledWith(1);
     expect(fetchSubmissoesDoDesafio).toHaveBeenCalledWith(1, expect.objectContaining({}));
 
@@ -264,6 +272,18 @@ describe("Desafios (tela de consulta e auditoria)", () => {
         expect.objectContaining({ clan: "CLÃ 1", status: "active_counted" })
       )
     );
+  });
+
+  it("shows the resolved coach for each submission", async () => {
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await user.click(await screen.findByText("Semana de Treinos"));
+
+    const row = (await screen.findByText("tok-abc123")).closest("tr");
+    expect(row).not.toBeNull();
+    const submissionsTable = (row as HTMLElement).closest("table") as HTMLElement;
+    expect(within(submissionsTable).getByRole("columnheader", { name: "Coach" })).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("Ana Albertim")).toBeInTheDocument();
   });
 
   it("applies the período filter client-side over already-fetched submissions", async () => {
@@ -308,6 +328,8 @@ describe("Desafios (tela de consulta e auditoria)", () => {
 
     // Current state.
     const currentState = within(detail).getByTestId("current-state");
+    expect(within(currentState).getByText("Coach")).toBeInTheDocument();
+    expect(within(currentState).getByText("Ana Albertim")).toBeInTheDocument();
     expect(within(currentState).getByText("CLÃ 1")).toBeInTheDocument();
     expect(within(currentState).getByText("semana de treinos")).toBeInTheDocument();
     expect(within(currentState).getByText("10")).toBeInTheDocument();

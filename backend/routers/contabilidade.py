@@ -472,9 +472,10 @@ def reprocessar_coaches():
 
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
-        # Desafios não pontuam coaches nesta fase (PRD 2026-08-19 §6/RF-14) —
-        # nenhum nome bruto de coach vem da fonte de desafios.
         raw_coaches |= {t["coach"] for t in supabase_client.list_coach_totals() if t.get("coach")}
+        # Fase 2: um coach cujo nome bruto só aparece nos tokens de desafio
+        # também precisa ser resolvido ao canônico.
+        raw_coaches |= supabase_client.get_all_desafio_token_coach_names()
 
         # Mapeamento implícito por normalize_key (resolve maiúsculas/minúsculas/acentos idênticos)
         # Prefere nome formatado com maiúsculas/minúsculas sobre ALL CAPS
@@ -504,6 +505,8 @@ def reprocessar_coaches():
         if coaches_afetados:
             all_regs = supabase_client.list_all_registros()
 
+        desafio_coach_totals = supabase_client.get_tipo_coach_totals("desafios")
+
         group_modalidades_upper = {m.upper() for m in GROUP_MODALIDADES}
         for canonical in coaches_afetados:
             regs_canonico = [r for r in all_regs if r.get("coach") == canonical]
@@ -528,7 +531,8 @@ def reprocessar_coaches():
             novo_carry = group_people % config.BATCH_SIZE_GROUP
             group_pts = lotes * config.POINTS_PER_BATCH_GROUP
             total_pagante = ci_pts + group_pts
-            total_pontos = total_pagante + pb_pts
+            desafio_pts = desafio_coach_totals.get(canonical, 0)
+            total_pontos = total_pagante + pb_pts + desafio_pts
             supabase_client.upsert_coach_total(
                 canonical, total_pontos,
                 pessoas_em_espera=novo_carry,
@@ -604,6 +608,7 @@ def sugerir_aliases_llm():
         totais = supabase_client.list_coach_totals()
         if totais:
             raw_coaches |= {t["coach"] for t in totais if t.get("coach")}
+        raw_coaches |= supabase_client.get_all_desafio_token_coach_names()
 
         canonical_list = sorted(list(set(alias_map.values()) | raw_coaches))
 

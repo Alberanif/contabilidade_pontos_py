@@ -1,7 +1,9 @@
-from datetime import date
+from datetime import date, datetime
 from supabase import create_client, Client
 
+import coach_identity
 import config
+from desafio_sheet_parser import SAO_PAULO
 
 TABLE_REGISTROS = "pontos_ultimate_registros_contabilizados"
 TABLE_TOTAIS = "pontos_ultimate_totais_por_clan"
@@ -13,11 +15,22 @@ TABLE_DESAFIO_REGISTROS_COACH = "desafio_registros_coach"
 TABLE_DESAFIO_IMPORTACAO_LINHAS = "desafio_importacao_linhas"
 TABLE_COACH_ALIASES = "pontos_ultimate_coach_aliases"
 TABLE_COACH_ALIASES_PENDENTES = "pontos_ultimate_coach_aliases_pendentes"
-
+TABLE_DESAFIO_SYNC_RUNS = "desafio_sync_runs"
+TABLE_DESAFIO_SUBMISSIONS_CURRENT = "desafio_submissions_current"
+TABLE_DESAFIO_SUBMISSION_VERSIONS = "desafio_submission_versions"
 
 
 def _get_client() -> Client:
     return create_client(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY)
+
+
+def call_rpc(function_name: str, params: dict):
+    """Executa uma função do Postgres (RPC) e devolve o dado retornado.
+
+    Usado por operações que precisam acontecer em uma única transação do banco,
+    onde escritas separadas pelo cliente deixariam estado parcial observável.
+    """
+    return _get_client().rpc(function_name, params).execute().data
 
 
 # --- Registros contabilizados ---
@@ -368,6 +381,204 @@ def get_coach_alias_map() -> dict[str, str]:
     return {row["alias"]: row["coach_canonico"] for row in result.data}
 
 
+# --- Sincronização de desafios via Google Sheets (somente leitura) ---
+
+
+def list_desafio_sync_runs(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Lista execuções de sincronização, da mais recente para a mais antiga."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SYNC_RUNS)
+        .select("*")
+        .order("started_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return result.data
+
+
+def list_desafio_submissions_current(
+    desafio_id: int | None = None,
+    clan: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Lista o estado atual dos tokens com filtros de auditoria opcionais."""
+    query = _get_client().table(TABLE_DESAFIO_SUBMISSIONS_CURRENT).select("*")
+    if desafio_id is not None:
+        query = query.eq("desafio_id", desafio_id)
+    if clan is not None:
+        query = query.eq("clan", clan)
+    if status is not None:
+        query = query.eq("status", status)
+    result = (
+        query.order("submitted_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return result.data
+
+
+def fetch_all_desafio_submissions_current() -> list[dict]:
+    """Retorna todas as linhas de estado atual, paginando até o fim.
+
+    Diferente de `list_desafio_submissions_current` (auditoria, com filtros e
+    página), esta leitura é a base completa da próxima reconciliação: nenhuma
+    linha pode faltar, sob pena de um token ser tratado como novo e pontuar
+    duas vezes.
+    """
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+            .select("*")
+            .order("token", desc=False)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            break
+        all_rows.extend(rows)
+        # Avança pelo que de fato veio, e nunca para só porque a página veio
+        # curta: o PostgREST pode limitar a resposta (`db-max-rows`) abaixo de
+        # `page_size`, e nesse caso uma página curta ainda tem continuação. Só
+        # uma página vazia prova o fim — o custo é uma requisição extra.
+        offset += len(rows)
+    return all_rows
+
+
+def fetch_active_counted_desafio_submissions() -> list[dict]:
+    """Retorna todos os tokens com `status='active_counted'`, paginando até o fim.
+
+    Base de agregação dos totais de clã por tipo `desafios` (`get_period_desafio_totals`,
+    `get_tipo_clan_totals('desafios')`). Diferente de `list_desafio_submissions_current`
+    (auditoria paginada, `limit` padrão de 100), esta leitura nunca pode truncar
+    silenciosamente: um clã com mais de 100 tokens ativos seria subcontado.
+    Diferente de `fetch_all_desafio_submissions_current` (base completa da
+    reconciliação, sem filtro), o filtro `status='active_counted'` acontece no
+    servidor para não trazer linhas inválidas/conflitantes/inativas que nunca
+    entrariam na soma.
+    """
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+            .select("*")
+            .eq("status", "active_counted")
+            .order("token", desc=False)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            break
+        all_rows.extend(rows)
+        # Mesma lógica de `fetch_all_desafio_submissions_current`: avança pelo
+        # que de fato veio, nunca para só porque a página veio curta (o
+        # PostgREST pode limitar a resposta abaixo de `page_size`).
+        offset += len(rows)
+    return all_rows
+
+
+def get_all_desafio_token_coach_names() -> set[str]:
+    """Nomes brutos de coach (coluna B) distintos, não vazios, dos tokens
+    `active_counted`. Base de descoberta de coach para `reprocessar_coaches`
+    e `sugerir_aliases_llm` — a fonte de desafios não escreve mais em
+    `desafio_registros_coach`."""
+    return {
+        (row.get("raw_name") or "").strip()
+        for row in fetch_active_counted_desafio_submissions()
+        if (row.get("raw_name") or "").strip()
+    }
+
+
+def _aggregate_desafio_tokens_by_coach(
+    rows: list[dict], inicio: "date | None" = None, fim: "date | None" = None
+) -> dict[str, int]:
+    """Agrupa `points` de tokens de desafio pelo coach canônico (coluna B
+    resolvida via `pontos_ultimate_coach_aliases`). Quando `inicio` é dado,
+    inclui só os tokens cuja data local (São Paulo) de `submitted_at` cai em
+    `[inicio, fim]` (`fim=None` = sem limite superior)."""
+    raw: dict[str, int] = {}
+    for row in rows:
+        name = (row.get("raw_name") or "").strip()
+        if not name:
+            continue
+        if inicio is not None:
+            local_date = _submitted_at_local_date(row.get("submitted_at"))
+            if local_date is None or local_date < inicio:
+                continue
+            if fim is not None and local_date > fim:
+                continue
+        raw[name] = raw.get(name, 0) + (row.get("points") or 0)
+    return coach_identity.aggregate_by_canonical(raw, get_coach_alias_map())
+
+
+def _submitted_at_local_date(raw_value) -> date | None:
+    """Converte `submitted_at` (string ISO8601 com offset, ou `datetime`) para
+    a data de calendário em América/São_Paulo — a unidade de período usada por
+    `get_period_desafio_totals`."""
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, datetime):
+        parsed = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        if text.endswith(("Z", "z")):
+            text = f"{text[:-1]}+00:00"
+        parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SAO_PAULO)
+    return parsed.astimezone(SAO_PAULO).date()
+
+
+def get_desafio_submission_current(token: str) -> dict | None:
+    """Busca o estado atual de um token global sem alterar sua grafia."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+        .select("*")
+        .eq("token", token)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def list_desafio_submission_versions(token: str) -> list[dict]:
+    """Lista todas as versões imutáveis de um token em ordem cronológica."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SUBMISSION_VERSIONS)
+        .select("*")
+        .eq("token", token)
+        .order("version_number", desc=False)
+        .execute()
+    )
+    return result.data
+
+
+def get_desafio_sync_run(run_id: int) -> dict | None:
+    """Busca uma única execução de sincronização pelo ID."""
+    result = (
+        _get_client()
+        .table(TABLE_DESAFIO_SYNC_RUNS)
+        .select("*")
+        .eq("id", run_id)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
 def insert_coach_alias(alias: str, coach_canonico: str) -> dict:
     """Cadastra (ou atualiza) um alias de coach."""
     client = _get_client()
@@ -494,12 +705,17 @@ def update_desafio_periodo_e_pontos(
     return result.data[0]
 
 
-def list_desafios(origem: str | None = None) -> list[dict]:
-    """Lista desafios, opcionalmente filtrando por origem ('manual' | 'csv_import')."""
+def list_desafios(origem: str | None = None, status: str | None = None) -> list[dict]:
+    """Lista desafios, opcionalmente filtrando por origem ('manual' | 'csv_import' |
+    'google_sheets') e/ou status. `status` aqui já deve ser o valor em português
+    usado no banco ('ativo' | 'arquivado') — o mapeamento do parâmetro em inglês
+    da API (`active`/`archived`/`all`) é responsabilidade do chamador."""
     client = _get_client()
     query = client.table(TABLE_DESAFIOS).select("*").order("created_at", desc=False)
     if origem is not None:
         query = query.eq("origem", origem)
+    if status is not None:
+        query = query.eq("status", status)
     return query.execute().data
 
 
@@ -508,6 +724,50 @@ def get_desafio(desafio_id: int) -> dict | None:
     client = _get_client()
     result = client.table(TABLE_DESAFIOS).select("*").eq("id", desafio_id).execute()
     return result.data[0] if result.data else None
+
+
+def get_desafio_clan_totals(desafio_id: int) -> dict[str, int]:
+    """Soma os pontos das submissões contabilizadas (`active_counted`) de um
+    desafio, agrupados por clã. A tabela fica restrita às submissões de um
+    único desafio, então somar em Python é suficiente e mais simples do que uma
+    função RPC dedicada só para este agrupamento."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+        .select("clan, points")
+        .eq("desafio_id", desafio_id)
+        .eq("status", "active_counted")
+        .execute()
+    )
+    totals: dict[str, int] = {}
+    for row in result.data:
+        clan = row.get("clan")
+        if not clan:
+            continue
+        totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
+    return totals
+
+
+def get_desafio_coach_totals(desafio_id: int) -> dict[str, int]:
+    """Soma os pontos das submissões `active_counted` de um desafio, agrupadas
+    pelo coach canônico (coluna B / `raw_name` resolvida via
+    `pontos_ultimate_coach_aliases`). Espelha `get_desafio_clan_totals` no eixo
+    coach (Fase 2)."""
+    client = _get_client()
+    result = (
+        client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
+        .select("raw_name, points")
+        .eq("desafio_id", desafio_id)
+        .eq("status", "active_counted")
+        .execute()
+    )
+    raw: dict[str, int] = {}
+    for row in result.data:
+        name = (row.get("raw_name") or "").strip()
+        if not name:
+            continue
+        raw[name] = raw.get(name, 0) + (row.get("points") or 0)
+    return coach_identity.aggregate_by_canonical(raw, get_coach_alias_map())
 
 
 def update_desafio(
@@ -717,92 +977,6 @@ def add_delta_to_coach_total(coach: str, delta: int) -> dict:
     return upsert_coach_total(coach, new_total)
 
 
-def get_all_desafio_coach_names() -> set[str]:
-    """Retorna o conjunto de nomes distintos de coach em desafio_registros_coach."""
-    client = _get_client()
-    result = client.table(TABLE_DESAFIO_REGISTROS_COACH).select("coach").execute()
-    return {row["coach"] for row in result.data if row.get("coach")}
-
-
-def update_desafio_importacao_linhas_coach(old_coach: str, new_coach: str) -> int:
-    """Reescreve o campo coach de old_coach para new_coach em desafio_importacao_linhas.
-    Retorna a quantidade de linhas atualizadas."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_DESAFIO_IMPORTACAO_LINHAS)
-        .update({"coach": new_coach})
-        .eq("coach", old_coach)
-        .execute()
-    )
-    return len(result.data)
-
-
-def get_desafio_coach_total(coach: str) -> int:
-    """Soma total_pontos dos registros de desafio de um coach, restrito a
-    desafios com contabilizar_pontos=true (mesmo filtro de get_tipo_coach_totals)."""
-    client = _get_client()
-    desafios = (
-        client.table(TABLE_DESAFIOS)
-        .select("id")
-        .eq("contabilizar_pontos", True)
-        .execute()
-        .data
-    )
-    desafio_ids = [d["id"] for d in desafios]
-    if not desafio_ids:
-        return 0
-    result = (
-        client.table(TABLE_DESAFIO_REGISTROS_COACH)
-        .select("total_pontos")
-        .eq("coach", coach)
-        .in_("desafio_id", desafio_ids)
-        .execute()
-    )
-    return sum(r["total_pontos"] for r in result.data)
-
-
-def _soma_valor_desafio(existente_valor, raw_valor):
-    total = int(existente_valor) + int(raw_valor)
-    return str(total) if isinstance(existente_valor, str) else total
-
-
-def merge_desafio_registros_coach(raw_coach: str, canonical: str) -> int:
-    """Funde os registros de desafio de raw_coach no canônico. Se o canônico já
-    tiver um registro no mesmo desafio (colisão de UNIQUE(desafio_id, coach)),
-    soma valores/total_pontos e apaga a linha antiga; senão, só renomeia o
-    coach da linha. Retorna a quantidade de linhas de raw_coach processadas."""
-    client = _get_client()
-    raw_rows = (
-        client.table(TABLE_DESAFIO_REGISTROS_COACH).select("*").eq("coach", raw_coach).execute().data
-    )
-    if not raw_rows:
-        return 0
-
-    canonical_rows = (
-        client.table(TABLE_DESAFIO_REGISTROS_COACH).select("*").eq("coach", canonical).execute().data
-    )
-    canonical_by_desafio = {r["desafio_id"]: r for r in canonical_rows}
-
-    for raw_row in raw_rows:
-        existente = canonical_by_desafio.get(raw_row["desafio_id"])
-        if existente:
-            valores_merged = {
-                campo_id: _soma_valor_desafio(valor, raw_row["valores"].get(campo_id, 0))
-                for campo_id, valor in existente["valores"].items()
-            }
-            novo_total = existente["total_pontos"] + raw_row["total_pontos"]
-            client.table(TABLE_DESAFIO_REGISTROS_COACH).update(
-                {"valores": valores_merged, "total_pontos": novo_total}
-            ).eq("id", existente["id"]).execute()
-            client.table(TABLE_DESAFIO_REGISTROS_COACH).delete().eq("id", raw_row["id"]).execute()
-        else:
-            client.table(TABLE_DESAFIO_REGISTROS_COACH).update(
-                {"coach": canonical}
-            ).eq("id", raw_row["id"]).execute()
-
-    return len(raw_rows)
-
-
 # --- Desafio Importação Linhas ---
 
 
@@ -956,78 +1130,39 @@ def get_period_coach_totals(inicio: date, fim: date | None = None) -> dict[str, 
 
 def get_period_desafio_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
-    Sum desafio points for desafios within the period [inicio, fim].
-    Only includes desafios with contabilizar_pontos=true.
+    Sum desafio points per clan from active tokens (`status='active_counted'`
+    in `desafio_submissions_current`) whose `submitted_at`, converted to
+    América/São_Paulo local time and taken as a calendar date, falls within
+    [inicio, fim]. Period membership is per-token, not per-desafio: a
+    correction that moves a token's submitted_at, clan or validation moves or
+    removes its contribution the next time this runs.
     Returns dict[clan_name, total_pontos].
     """
-    client = _get_client()
-
-    # Fetch desafios in the period
-    desafios_query = (
-        client.table(TABLE_DESAFIOS)
-        .select("id")
-        .gte("data", inicio.isoformat())
-        .eq("contabilizar_pontos", True)
-    )
-    if fim:
-        desafios_query = desafios_query.lte("data", fim.isoformat())
-    desafios = desafios_query.execute().data
-    desafio_ids = [d["id"] for d in desafios]
-
-    if not desafio_ids:
-        return {}
-
-    # Fetch desafio_registros for those desafios
-    registros_query = (
-        client.table(TABLE_DESAFIO_REGISTROS)
-        .select("clan, total_pontos")
-        .in_("desafio_id", desafio_ids)
-    )
-    registros = registros_query.execute().data
-
-    totals = {}
-    for registro in registros:
-        clan = registro["clan"]
-        totals[clan] = totals.get(clan, 0) + registro["total_pontos"]
-
+    totals: dict[str, int] = {}
+    for row in fetch_active_counted_desafio_submissions():
+        clan = row.get("clan")
+        if not clan:
+            continue
+        local_date = _submitted_at_local_date(row.get("submitted_at"))
+        if local_date is None or local_date < inicio:
+            continue
+        if fim is not None and local_date > fim:
+            continue
+        totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
     return totals
 
 
 def get_period_desafio_coach_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
-    Sum desafio points per coach for desafios within the period [inicio, fim].
-    Only includes desafios with contabilizar_pontos=true.
-    Returns dict[coach_name, total_pontos].
+    Soma os pontos de desafio por coach a partir dos tokens `active_counted`
+    de `desafio_submissions_current` cujo `submitted_at`, convertido para a data
+    de calendário em América/São_Paulo, cai em `[inicio, fim]`. O coach é a
+    coluna B (`raw_name`) resolvida ao nome canônico. Fase 2 — antes lia a
+    tabela legada `desafio_registros_coach`.
     """
-    client = _get_client()
-
-    desafios_query = (
-        client.table(TABLE_DESAFIOS)
-        .select("id")
-        .gte("data", inicio.isoformat())
-        .eq("contabilizar_pontos", True)
+    return _aggregate_desafio_tokens_by_coach(
+        fetch_active_counted_desafio_submissions(), inicio, fim
     )
-    if fim:
-        desafios_query = desafios_query.lte("data", fim.isoformat())
-    desafios = desafios_query.execute().data
-    desafio_ids = [d["id"] for d in desafios]
-
-    if not desafio_ids:
-        return {}
-
-    registros_query = (
-        client.table(TABLE_DESAFIO_REGISTROS_COACH)
-        .select("coach, total_pontos")
-        .in_("desafio_id", desafio_ids)
-    )
-    registros = registros_query.execute().data
-
-    totals = {}
-    for registro in registros:
-        coach = registro["coach"]
-        totals[coach] = totals.get(coach, 0) + registro["total_pontos"]
-
-    return totals
 
 
 def get_tipo_clan_totals(
@@ -1040,26 +1175,17 @@ def get_tipo_clan_totals(
     if tipo == "desafios":
         if inicio:
             return get_period_desafio_totals(inicio, fim)
-        desafios = (
-            client.table(TABLE_DESAFIOS)
-            .select("id")
-            .eq("contabilizar_pontos", True)
-            .execute()
-            .data
-        )
-        desafio_ids = [d["id"] for d in desafios]
-        if not desafio_ids:
-            return {}
-        registros = (
-            client.table(TABLE_DESAFIO_REGISTROS)
-            .select("clan, total_pontos")
-            .in_("desafio_id", desafio_ids)
-            .execute()
-            .data
-        )
+        # Sem filtro de data: soma todos os tokens ativos, sem olhar
+        # `submitted_at`. O status `active_counted` (computado pela
+        # reconciliação a partir da própria coluna "Sim" da planilha) é o
+        # único portão sobre se um token conta — não há mais um toggle
+        # `contabilizar_pontos` por desafio a preservar aqui.
         totals: dict[str, int] = {}
-        for r in registros:
-            totals[r["clan"]] = totals.get(r["clan"], 0) + r["total_pontos"]
+        for row in fetch_active_counted_desafio_submissions():
+            clan = row.get("clan")
+            if not clan:
+                continue
+            totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
         return totals
 
     # Without date filter: read breakdown columns from TABLE_TOTAIS
@@ -1118,28 +1244,9 @@ def get_tipo_coach_totals(
     if tipo == "desafios":
         if inicio:
             return get_period_desafio_coach_totals(inicio, fim)
-        client = _get_client()
-        desafios = (
-            client.table(TABLE_DESAFIOS)
-            .select("id")
-            .eq("contabilizar_pontos", True)
-            .execute()
-            .data
+        return _aggregate_desafio_tokens_by_coach(
+            fetch_active_counted_desafio_submissions()
         )
-        desafio_ids = [d["id"] for d in desafios]
-        if not desafio_ids:
-            return {}
-        registros = (
-            client.table(TABLE_DESAFIO_REGISTROS_COACH)
-            .select("coach, total_pontos")
-            .in_("desafio_id", desafio_ids)
-            .execute()
-            .data
-        )
-        totals: dict[str, int] = {}
-        for r in registros:
-            totals[r["coach"]] = totals.get(r["coach"], 0) + r["total_pontos"]
-        return totals
 
     client = _get_client()
 

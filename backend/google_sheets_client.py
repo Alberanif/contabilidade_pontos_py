@@ -8,9 +8,13 @@ import config
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
 
-def _get_service():
+class DesafioSheetConfigurationError(RuntimeError):
+    """Configuração dedicada da fonte oficial de desafios está incompleta."""
+
+
+def _get_service(scopes: list[str] = SCOPES):
     info = json.loads(config.GOOGLE_SERVICE_ACCOUNT_JSON)
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
     return build("sheets", "v4", credentials=creds)
 
 
@@ -46,6 +50,38 @@ def fetch_records_pro_bono() -> list[list[str]]:
         .get(
             spreadsheetId=config.GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID,
             range=sheet_name,
+        )
+        .execute()
+    )
+    return result.get("values", [])
+
+
+def fetch_desafio_records() -> list[list[str]]:
+    """Lê o contrato posicional A-I da aba oficial de desafios."""
+    missing = [
+        name
+        for name, value in (
+            (
+                "GSHEET_DESAFIOS_SPREADSHEET_ID",
+                config.GSHEET_DESAFIOS_SPREADSHEET_ID,
+            ),
+            ("GSHEET_DESAFIOS_SHEET_NAME", config.GSHEET_DESAFIOS_SHEET_NAME),
+        )
+        if not value
+    ]
+    if missing:
+        raise DesafioSheetConfigurationError(
+            "Configuração da planilha de desafios ausente: " + ", ".join(missing)
+        )
+
+    service = _get_service(scopes=SCOPES)
+    sheet_range = f"'{config.GSHEET_DESAFIOS_SHEET_NAME}'!A:I"
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=config.GSHEET_DESAFIOS_SPREADSHEET_ID,
+            range=sheet_range,
         )
         .execute()
     )

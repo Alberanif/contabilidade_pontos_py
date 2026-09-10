@@ -1,19 +1,57 @@
 import { useEffect, useState } from "react";
 import {
-  fetchRanking,
-  atualizarPlanilha,
-  fetchDesafios,
-  createDesafio,
-  updateDesafio,
-  deleteDesafio,
-  fetchDesafioRegistros,
-  type RankingEntry,
-  type Desafio,
-  type DesafioRegistro,
+  fetchDesafiosAuditoria,
+  fetchDesafioAuditoria,
+  fetchSubmissoesDoDesafio,
+  fetchSubmissaoPorToken,
+  fetchVersoesDaSubmissao,
+  fetchSincronizacoes,
+  fetchSincronizacao,
+  type DesafioAuditoria,
+  type DesafioAuditoriaDetalhe,
+  type DesafioSubmissao,
+  type DesafioSubmissaoVersao,
+  type DesafioSincronizacao,
 } from "../api/client";
-import ImportarDesafioWizard from "../components/ImportarDesafioWizard";
+import DesafioFilters, { type DesafioFiltersValue } from "../components/DesafioFilters";
+import SubmissionDetail from "../components/SubmissionDetail";
+import SyncRunDetail from "../components/SyncRunDetail";
 
-function formatDate(dateStr: string): string {
+// Tela de consulta e auditoria de Desafios (issue #21) — somente leitura,
+// contra a API de auditoria da Task 7 (backend/routers/desafio_auditoria.py).
+// Não existe mais nenhuma criação/edição/exclusão de desafio ou registro, nem
+// o assistente de importação via CSV: todo endpoint mutável equivalente no
+// backend responde 410 (issue #17).
+
+// Rótulos em pt-BR para o vocabulário de status de submissão — mesma lista de
+// `SubmissionDetail.tsx` (não compartilhada por arquivo, ver comentário lá).
+const SUBMISSION_STATUS_LABELS: Record<string, string> = {
+  active_counted: "Ativo contabilizado",
+  active_not_counted: "Ativo não contabilizado",
+  invalid: "Inválido",
+  conflicted: "Conflitante",
+  inactive_missing: "Inativo (ausente)",
+  blocked_by_guardrail: "Bloqueado por guardrail",
+};
+
+const SUBMISSION_STATUS_OPTIONS = Object.entries(SUBMISSION_STATUS_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}));
+
+const DESAFIO_STATUS_LABELS: Record<string, string> = {
+  ativo: "Ativo",
+  arquivado: "Arquivado",
+};
+
+// Limite explícito de submissões buscadas por página — casa com o default
+// implícito do backend (limit=100). Como não há controle de paginação nesta
+// tela (fora de escopo), quando a contagem retornada bate exatamente nesse
+// limite exibimos um aviso: pode haver mais linhas que a UI não está
+// mostrando, e o filtro de período client-side só enxerga esta página.
+const SUBMISSOES_LIMIT = 100;
+
+function formatDate(dateStr: string | null): string {
   if (!dateStr) return "-";
   const parts = dateStr.substring(0, 10).split("-");
   if (parts.length !== 3) return dateStr;
@@ -21,294 +59,384 @@ function formatDate(dateStr: string): string {
   return `${day}/${month}/${year}`;
 }
 
-function formatPeriodo(d: Desafio): string {
+function formatDateTime(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("pt-BR");
+}
+
+function formatPeriodo(d: DesafioAuditoria): string {
   if (d.data_inicio && d.data_fim) {
     return `${formatDate(d.data_inicio)} - ${formatDate(d.data_fim)}`;
   }
   return formatDate(d.data);
 }
 
-type Mode = "list" | "form" | "detail" | "import";
-
-interface RegistroForm {
-  clan: string;
-  pontos: string;
+function ClanDeltaList({ deltas }: { deltas: Record<string, number> }) {
+  const entries = Object.entries(deltas);
+  if (entries.length === 0) {
+    return <p className="text-gray-500 text-sm">Nenhuma alteração nos clãs.</p>;
+  }
+  return (
+    <ul className="space-y-0.5 text-sm">
+      {entries.map(([clan, delta]) => (
+        <li key={clan} className="flex justify-between max-w-xs">
+          <span className="text-gray-700">{clan}</span>
+          <span className={delta >= 0 ? "font-semibold text-green-600" : "font-semibold text-red-600"}>
+            {delta >= 0 ? "+" : ""}
+            {delta}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
+type DesafioView =
+  | { name: "lista" }
+  | { name: "detalhe"; id: number }
+  | { name: "submissao"; token: string }
+  | { name: "versoes"; token: string };
+
+type SyncView = { name: "lista" } | { name: "detalhe"; runId: number };
+
+const tabClass = (active: boolean) =>
+  `whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${
+    active
+      ? "border-indigo-500 text-indigo-600"
+      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+  }`;
+
+const toggleClass = (active: boolean) =>
+  `px-3 py-1.5 text-sm font-medium transition-colors ${
+    active ? "bg-indigo-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+  }`;
+
 export default function Desafios() {
-  const [mode, setMode] = useState<Mode>("list");
-  const [desafios, setDesafios] = useState<Desafio[]>([]);
-  const [selectedDesafio, setSelectedDesafio] = useState<Desafio | null>(null);
-  const [registros, setRegistros] = useState<DesafioRegistro[]>([]);
-  const [ranking, setRanking] = useState<RankingEntry[]>([]);
+  const [aba, setAba] = useState<"desafios" | "sincronizacoes">("desafios");
 
-  // Form state
-  const [editingDesafio, setEditingDesafio] = useState<Desafio | null>(null);
-  const [formNome, setFormNome] = useState("");
-  const [formContabilizar, setFormContabilizar] = useState(true);
-  const [formDataInicio, setFormDataInicio] = useState("");
-  const [formDataFim, setFormDataFim] = useState("");
-  const [formRegistros, setFormRegistros] = useState<RegistroForm[]>([]);
+  // --- Aba Desafios ---
+  const [desafioView, setDesafioView] = useState<DesafioView>({ name: "lista" });
 
-  // UI state
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [updatingSheet, setUpdatingSheet] = useState(false);
-  const [sheetMessage, setSheetMessage] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [statusFiltroDesafio, setStatusFiltroDesafio] = useState<"active" | "archived" | "all">("active");
+  const [desafios, setDesafios] = useState<DesafioAuditoria[]>([]);
+  const [loadingDesafios, setLoadingDesafios] = useState(true);
+  const [erroDesafios, setErroDesafios] = useState("");
 
-  const loadDesafios = async () => {
-    try {
-      setLoading(true);
-      const data = await fetchDesafios();
-      setDesafios(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao carregar desafios");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [desafioDetalhe, setDesafioDetalhe] = useState<DesafioAuditoriaDetalhe | null>(null);
+  const [loadingDetalhe, setLoadingDetalhe] = useState(false);
+  const [erroDetalhe, setErroDetalhe] = useState("");
 
-  const loadRanking = async () => {
-    try {
-      const data = await fetchRanking();
-      setRanking(data);
-    } catch {
-      // ranking é opcional
-    }
-  };
+  const [filtros, setFiltros] = useState<DesafioFiltersValue>({
+    clan: "",
+    status: "",
+    dataInicio: "",
+    dataFim: "",
+  });
+  const [submissoes, setSubmissoes] = useState<DesafioSubmissao[]>([]);
+  const [loadingSubmissoes, setLoadingSubmissoes] = useState(false);
+  const [erroSubmissoes, setErroSubmissoes] = useState("");
 
-  const loadRegistros = async (desafioId: number) => {
-    try {
-      const data = await fetchDesafioRegistros(desafioId);
-      setRegistros(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao carregar registros");
-    }
-  };
+  const [submissaoAtual, setSubmissaoAtual] = useState<DesafioSubmissao | null>(null);
+  const [loadingSubmissao, setLoadingSubmissao] = useState(false);
+  const [erroSubmissao, setErroSubmissao] = useState("");
+
+  const [versoes, setVersoes] = useState<DesafioSubmissaoVersao[]>([]);
+  const [loadingVersoes, setLoadingVersoes] = useState(false);
+  const [erroVersoes, setErroVersoes] = useState("");
+
+  // --- Aba Sincronizações ---
+  const [syncView, setSyncView] = useState<SyncView>({ name: "lista" });
+  const [execucoes, setExecucoes] = useState<DesafioSincronizacao[]>([]);
+  const [loadingExecucoes, setLoadingExecucoes] = useState(true);
+  const [erroExecucoes, setErroExecucoes] = useState("");
+
+  const [execucaoAtual, setExecucaoAtual] = useState<DesafioSincronizacao | null>(null);
+  const [loadingExecucao, setLoadingExecucao] = useState(false);
+  const [erroExecucao, setErroExecucao] = useState("");
+
+  // --- Busca de token (lookup direto, não é filtro de lista) ---
+  const [tokenBusca, setTokenBusca] = useState("");
+  const [buscandoToken, setBuscandoToken] = useState(false);
+  const [erroBuscaToken, setErroBuscaToken] = useState("");
+
+  // --- Efeitos de carregamento ---
 
   useEffect(() => {
-    loadDesafios();
-    loadRanking();
-  }, []);
+    let cancelado = false;
+    setLoadingDesafios(true);
+    setErroDesafios("");
+    fetchDesafiosAuditoria(statusFiltroDesafio)
+      .then((data) => {
+        if (!cancelado) setDesafios(data);
+      })
+      .catch((e) => {
+        if (!cancelado) setErroDesafios(e instanceof Error ? e.message : "Erro ao carregar desafios");
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingDesafios(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [statusFiltroDesafio]);
 
-  const handleAtualizarPlanilha = async () => {
+  const desafioDetalheId = desafioView.name === "detalhe" ? desafioView.id : null;
+
+  useEffect(() => {
+    if (desafioDetalheId == null) return;
+    let cancelado = false;
+    setLoadingDetalhe(true);
+    setErroDetalhe("");
+    setDesafioDetalhe(null);
+    fetchDesafioAuditoria(desafioDetalheId)
+      .then((data) => {
+        if (!cancelado) setDesafioDetalhe(data);
+      })
+      .catch((e) => {
+        if (!cancelado) setErroDetalhe(e instanceof Error ? e.message : "Erro ao carregar desafio");
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingDetalhe(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [desafioDetalheId]);
+
+  useEffect(() => {
+    if (desafioDetalheId == null) return;
+    let cancelado = false;
+    setLoadingSubmissoes(true);
+    setErroSubmissoes("");
+    setSubmissoes([]);
+    fetchSubmissoesDoDesafio(desafioDetalheId, {
+      clan: filtros.clan || undefined,
+      status: filtros.status || undefined,
+      limit: SUBMISSOES_LIMIT,
+    })
+      .then((data) => {
+        if (!cancelado) setSubmissoes(data);
+      })
+      .catch((e) => {
+        if (!cancelado) setErroSubmissoes(e instanceof Error ? e.message : "Erro ao carregar submissões");
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingSubmissoes(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+    // Deliberado: dataInicio/dataFim ficam de fora — não existe parâmetro de
+    // período no backend (ver contrato da Task 7), então o período é aplicado
+    // no cliente sobre a página já carregada, sem novas chamadas ao servidor.
+  }, [desafioDetalheId, filtros.clan, filtros.status]);
+
+  const submissaoToken = desafioView.name === "submissao" ? desafioView.token : null;
+
+  useEffect(() => {
+    if (submissaoToken == null) return;
+    let cancelado = false;
+    setLoadingSubmissao(true);
+    setErroSubmissao("");
+    setSubmissaoAtual(null);
+    fetchSubmissaoPorToken(submissaoToken)
+      .then((data) => {
+        if (!cancelado) setSubmissaoAtual(data);
+      })
+      .catch((e) => {
+        if (!cancelado) setErroSubmissao(e instanceof Error ? e.message : "Erro ao carregar submissão");
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingSubmissao(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [submissaoToken]);
+
+  const versoesToken = desafioView.name === "versoes" ? desafioView.token : null;
+
+  useEffect(() => {
+    if (versoesToken == null) return;
+    let cancelado = false;
+    setLoadingVersoes(true);
+    setErroVersoes("");
+    setVersoes([]);
+    fetchVersoesDaSubmissao(versoesToken)
+      .then((data) => {
+        if (!cancelado) setVersoes(data);
+      })
+      .catch((e) => {
+        if (!cancelado) setErroVersoes(e instanceof Error ? e.message : "Erro ao carregar histórico de versões");
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingVersoes(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [versoesToken]);
+
+  useEffect(() => {
+    if (aba !== "sincronizacoes" || syncView.name !== "lista") return;
+    let cancelado = false;
+    setLoadingExecucoes(true);
+    setErroExecucoes("");
+    fetchSincronizacoes()
+      .then((data) => {
+        if (!cancelado) setExecucoes(data);
+      })
+      .catch((e) => {
+        if (!cancelado) setErroExecucoes(e instanceof Error ? e.message : "Erro ao carregar sincronizações");
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingExecucoes(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [aba, syncView.name]);
+
+  const execucaoRunId = syncView.name === "detalhe" ? syncView.runId : null;
+
+  useEffect(() => {
+    if (execucaoRunId == null) return;
+    let cancelado = false;
+    setLoadingExecucao(true);
+    setErroExecucao("");
+    setExecucaoAtual(null);
+    fetchSincronizacao(execucaoRunId)
+      .then((data) => {
+        if (!cancelado) setExecucaoAtual(data);
+      })
+      .catch((e) => {
+        if (!cancelado) setErroExecucao(e instanceof Error ? e.message : "Erro ao carregar execução");
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingExecucao(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [execucaoRunId]);
+
+  // --- Ações de navegação ---
+
+  const abrirDesafio = (id: number) => {
+    setFiltros({ clan: "", status: "", dataInicio: "", dataFim: "" });
+    setDesafioView({ name: "detalhe", id });
+  };
+
+  const abrirSubmissao = (token: string) => {
+    setDesafioView({ name: "submissao", token });
+  };
+
+  const abrirVersoes = (token: string) => {
+    setDesafioView({ name: "versoes", token });
+  };
+
+  const abrirExecucao = (runId: number) => {
+    setAba("sincronizacoes");
+    setSyncView({ name: "detalhe", runId });
+  };
+
+  const handleBuscarToken = async () => {
+    const token = tokenBusca.trim();
+    if (!token) return;
     try {
-      setUpdatingSheet(true);
-      setSheetMessage("");
-      setError("");
-      const data = await atualizarPlanilha();
-      setSheetMessage(data.mensagem);
+      setBuscandoToken(true);
+      setErroBuscaToken("");
+      const submissao = await fetchSubmissaoPorToken(token);
+      setSubmissaoAtual(submissao);
+      setAba("desafios");
+      setDesafioView({ name: "submissao", token: submissao.token });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao atualizar planilha");
+      setErroBuscaToken(e instanceof Error ? e.message : "Token não encontrado");
     } finally {
-      setUpdatingSheet(false);
+      setBuscandoToken(false);
     }
   };
 
-  const openCreateForm = () => {
-    setEditingDesafio(null);
-    setFormNome("");
-    setFormContabilizar(true);
-    setFormDataInicio("");
-    setFormDataFim("");
-    setFormRegistros([]);
-    setError("");
-    setSuccess("");
-    setMode("form");
-  };
+  // --- Filtro de período (client-side, ver comentário no efeito de submissões) ---
 
-  const openEditForm = async (desafio: Desafio) => {
-    setEditingDesafio(desafio);
-    setFormNome(desafio.nome);
-    setFormContabilizar(desafio.contabilizar_pontos);
-    setFormDataInicio(desafio.data_inicio ?? desafio.data ?? "");
-    setFormDataFim(desafio.data_fim ?? desafio.data ?? "");
-    setError("");
-    setSuccess("");
-    try {
-      const data = await fetchDesafioRegistros(desafio.id);
-      setFormRegistros(data.map((r) => ({ clan: r.clan, pontos: String(r.total_pontos) })));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao carregar registros do desafio");
-      setFormRegistros([]);
-    }
-    setMode("form");
-  };
+  const submissoesFiltradas = submissoes.filter((s) => {
+    if (!filtros.dataInicio && !filtros.dataFim) return true;
+    if (!s.submitted_at) return false;
+    const dia = s.submitted_at.slice(0, 10);
+    if (filtros.dataInicio && dia < filtros.dataInicio) return false;
+    if (filtros.dataFim && dia > filtros.dataFim) return false;
+    return true;
+  });
 
-  const openDetail = async (desafio: Desafio) => {
-    setSelectedDesafio(desafio);
-    setError("");
-    setSuccess("");
-    await loadRegistros(desafio.id);
-    setMode("detail");
-  };
+  // --- Elementos compartilhados ---
 
-  const addRegistroRow = () => {
-    setFormRegistros([...formRegistros, { clan: "", pontos: "0" }]);
-  };
-
-  const removeRegistroRow = (index: number) => {
-    setFormRegistros(formRegistros.filter((_, i) => i !== index));
-  };
-
-  const updateRegistroRow = (
-    index: number,
-    field: keyof RegistroForm,
-    value: string
-  ) => {
-    setFormRegistros(
-      formRegistros.map((r, i) => (i === index ? { ...r, [field]: value } : r))
-    );
-  };
-
-  const clanOptionsFor = (index: number) => {
-    const chosenElsewhere = new Set(
-      formRegistros.filter((_, i) => i !== index).map((r) => r.clan)
-    );
-    return ranking.filter((r) => !chosenElsewhere.has(r.clan));
-  };
-
-  const handleSaveDesafio = async () => {
-    if (!formNome.trim()) {
-      setError("O nome do desafio é obrigatório.");
-      return;
-    }
-    if (!formDataInicio || !formDataFim) {
-      setError("O período (data início e fim) é obrigatório.");
-      return;
-    }
-    if (formDataFim < formDataInicio) {
-      setError("A data fim deve ser maior ou igual à data início.");
-      return;
-    }
-    if (formRegistros.some((r) => !r.clan || r.pontos.trim() === "")) {
-      setError("Selecione o clã e informe a pontuação em todas as linhas.");
-      return;
-    }
-    const clansInformados = formRegistros.map((r) => r.clan);
-    if (new Set(clansInformados).size !== clansInformados.length) {
-      setError("Um mesmo clã não pode aparecer duas vezes.");
-      return;
-    }
-    try {
-      setSubmitting(true);
-      setError("");
-      const registros = formRegistros.map((r) => ({
-        clan: r.clan,
-        pontos: Number(r.pontos),
-      }));
-      if (editingDesafio) {
-        await updateDesafio(editingDesafio.id, {
-          nome: formNome,
-          contabilizar_pontos: formContabilizar,
-          data_inicio: formDataInicio,
-          data_fim: formDataFim,
-          registros,
-        });
-        setSuccess("Desafio atualizado com sucesso.");
-      } else {
-        await createDesafio({
-          nome: formNome,
-          contabilizar_pontos: formContabilizar,
-          data_inicio: formDataInicio,
-          data_fim: formDataFim,
-          registros,
-        });
-        setSuccess("Desafio criado com sucesso.");
-      }
-      await loadDesafios();
-      setMode("list");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao salvar desafio");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleDeleteDesafio = async (desafio: Desafio) => {
-    const msg = desafio.contabilizar_pontos
-      ? `Excluir o desafio "${desafio.nome}"? Os pontos dos clãs serão descontados.`
-      : `Excluir o desafio "${desafio.nome}"?`;
-    if (!confirm(msg)) return;
-    try {
-      setError("");
-      await deleteDesafio(desafio.id);
-      setSuccess(`Desafio "${desafio.nome}" excluído.`);
-      await loadDesafios();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao excluir desafio");
-    }
-  };
-
-  // --- Shared elements ---
-
-  const sheetBtn = (
-    <button
-      onClick={handleAtualizarPlanilha}
-      disabled={updatingSheet}
-      className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-    >
-      {updatingSheet ? "Atualizando..." : "Atualizar Planilha"}
-    </button>
-  );
-
-  const alertError = error && (
-    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-      {error}
+  const tokenSearchBox = (
+    <div className="flex items-end gap-2">
+      <div>
+        <label htmlFor="busca-token" className="block text-xs font-medium text-gray-500 mb-1">
+          Token
+        </label>
+        <input
+          id="busca-token"
+          type="text"
+          value={tokenBusca}
+          onChange={(e) => setTokenBusca(e.target.value)}
+          placeholder="Buscar por token exato"
+          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={handleBuscarToken}
+        disabled={buscandoToken}
+        className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {buscandoToken ? "Buscando..." : "Buscar"}
+      </button>
     </div>
   );
 
-  const alertSuccess = success && (
-    <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
-      {success}
-    </div>
-  );
+  // --- Aba Desafios ---
 
-  const alertSheet = sheetMessage && (
-    <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg">
-      {sheetMessage}
-    </div>
-  );
+  let conteudoDesafios: React.ReactNode;
 
-  // --- List mode ---
-  if (mode === "list") {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold text-gray-800">Desafios</h2>
-          <div className="flex gap-3">
-            {sheetBtn}
-            <button
-              onClick={() => {
-                setError("");
-                setSuccess("");
-                setMode("import");
-              }}
-              className="bg-white text-indigo-600 border border-indigo-600 px-4 py-2 rounded-lg font-medium hover:bg-indigo-50 transition-colors"
-            >
-              Importar CSV
-            </button>
-            <button
-              onClick={openCreateForm}
-              className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
-            >
-              Novo Desafio
-            </button>
-          </div>
+  if (desafioView.name === "lista") {
+    conteudoDesafios = (
+      <div className="space-y-4">
+        <div className="flex rounded-lg border border-gray-300 overflow-hidden w-fit">
+          <button
+            type="button"
+            onClick={() => setStatusFiltroDesafio("active")}
+            className={toggleClass(statusFiltroDesafio === "active")}
+          >
+            Ativos
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFiltroDesafio("archived")}
+            className={`${toggleClass(statusFiltroDesafio === "archived")} border-l border-gray-300`}
+          >
+            Arquivados
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFiltroDesafio("all")}
+            className={`${toggleClass(statusFiltroDesafio === "all")} border-l border-gray-300`}
+          >
+            Todos
+          </button>
         </div>
 
-        {alertError}
-        {alertSuccess}
-        {alertSheet}
+        {erroDesafios && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{erroDesafios}</div>
+        )}
 
-        {loading ? (
+        {loadingDesafios ? (
           <p className="text-gray-500">Carregando desafios...</p>
         ) : desafios.length === 0 ? (
-          <p className="text-gray-500">
-            Nenhum desafio cadastrado. Clique em "Novo Desafio" para começar.
-          </p>
+          <p className="text-gray-500">Nenhum desafio encontrado.</p>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
@@ -316,58 +444,42 @@ export default function Desafios() {
                 <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
                   <th className="py-3 px-4 font-medium">Nome</th>
                   <th className="py-3 px-4 font-medium">Período</th>
-                  <th className="py-3 px-4 font-medium text-center">Clãs registrados</th>
+                  <th className="py-3 px-4 font-medium">Status</th>
                   <th className="py-3 px-4 font-medium text-center">Pontuação</th>
-                  <th className="py-3 px-4 font-medium text-right">Ações</th>
+                  <th className="py-3 px-4 font-medium">Origem</th>
                 </tr>
               </thead>
               <tbody>
                 {desafios.map((d) => (
-                  <tr
-                    key={d.id}
-                    className="border-b border-gray-100 hover:bg-gray-50"
-                  >
+                  <tr key={d.id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="py-3 px-4">
                       <button
-                        onClick={() => openDetail(d)}
+                        onClick={() => abrirDesafio(d.id)}
                         className="font-medium text-indigo-600 hover:underline text-left"
                       >
                         {d.nome}
                       </button>
                     </td>
-                    <td className="py-3 px-4 text-gray-600">
-                      {formatPeriodo(d)}
-                    </td>
-                    <td className="py-3 px-4 text-center text-gray-600">
-                      {d.total_registros}
+                    <td className="py-3 px-4 text-gray-600">{formatPeriodo(d)}</td>
+                    <td className="py-3 px-4">
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          d.status === "ativo" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
+                        }`}
+                      >
+                        {DESAFIO_STATUS_LABELS[d.status] ?? d.status}
+                      </span>
                     </td>
                     <td className="py-3 px-4 text-center">
                       <span
                         className={`px-2 py-0.5 rounded text-xs font-medium ${
-                          d.contabilizar_pontos
-                            ? "bg-green-100 text-green-700"
-                            : "bg-gray-100 text-gray-600"
+                          d.contabilizar_pontos ? "bg-indigo-100 text-indigo-700" : "bg-gray-100 text-gray-600"
                         }`}
                       >
-                        {d.contabilizar_pontos ? "Registrar" : "Não Registrar"}
+                        {d.contabilizar_pontos ? "Contabiliza" : "Não contabiliza"}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-right space-x-3">
-                      {d.origem !== "csv_import" && (
-                        <button
-                          onClick={() => openEditForm(d)}
-                          className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-                        >
-                          Editar
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleDeleteDesafio(d)}
-                        className="text-red-600 hover:text-red-800 text-sm font-medium"
-                      >
-                        Excluir
-                      </button>
-                    </td>
+                    <td className="py-3 px-4 text-gray-600">{d.origem}</td>
                   </tr>
                 ))}
               </tbody>
@@ -376,275 +488,304 @@ export default function Desafios() {
         )}
       </div>
     );
-  }
+  } else if (desafioView.name === "detalhe") {
+    conteudoDesafios = (
+      <div className="space-y-6">
+        <button onClick={() => setDesafioView({ name: "lista" })} className="text-gray-500 hover:text-gray-700 text-sm">
+          ← Desafios
+        </button>
 
-  // --- Import mode (CSV wizard) ---
-  if (mode === "import") {
-    return (
-      <ImportarDesafioWizard
-        onCancel={() => setMode("list")}
-        onImported={async () => {
-          setSuccess("Desafio importado com sucesso.");
-          await loadDesafios();
-          setMode("list");
-        }}
-      />
-    );
-  }
+        {erroDetalhe && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{erroDetalhe}</div>
+        )}
 
-  // --- Form mode (create / edit) ---
-  if (mode === "form") {
-    return (
-      <div className="space-y-6 max-w-2xl">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setMode("list")}
-            className="text-gray-500 hover:text-gray-700 text-sm"
-          >
-            ← Desafios
-          </button>
-          <h2 className="text-2xl font-bold text-gray-800">
-            {editingDesafio ? "Editar Desafio" : "Novo Desafio"}
-          </h2>
-        </div>
-
-        {alertError}
-
-        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Nome do desafio
-            </label>
-            <input
-              type="text"
-              value={formNome}
-              onChange={(e) => setFormNome(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              placeholder="Ex: Semana de Treinos"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Data início
-              </label>
-              <input
-                type="date"
-                value={formDataInicio}
-                onChange={(e) => setFormDataInicio(e.target.value)}
-                required
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Data fim
-              </label>
-              <input
-                type="date"
-                value={formDataFim}
-                onChange={(e) => setFormDataFim(e.target.value)}
-                required
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Pontuação no ranking
-            </label>
-            <div className="flex rounded-lg border border-gray-300 overflow-hidden w-fit">
-              <button
-                type="button"
-                onClick={() => setFormContabilizar(true)}
-                className={`px-4 py-2 text-sm font-medium transition-colors ${
-                  formContabilizar
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white text-gray-600 hover:bg-gray-50"
+        {loadingDetalhe ? (
+          <p className="text-gray-500">Carregando desafio...</p>
+        ) : desafioDetalhe ? (
+          <>
+            <div className="flex items-center gap-3 flex-wrap">
+              <h3 className="text-xl font-bold text-gray-800">{desafioDetalhe.nome}</h3>
+              <span
+                className={`px-2 py-0.5 rounded text-xs font-medium ${
+                  desafioDetalhe.status === "ativo" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
                 }`}
               >
-                Registrar Pontos
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormContabilizar(false)}
-                className={`px-4 py-2 text-sm font-medium border-l border-gray-300 transition-colors ${
-                  !formContabilizar
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                Não Registrar Pontos
-              </button>
+                {DESAFIO_STATUS_LABELS[desafioDetalhe.status] ?? desafioDetalhe.status}
+              </span>
+              <span className="text-sm text-gray-500">{formatPeriodo(desafioDetalhe)}</span>
             </div>
-            <p className="mt-1 text-xs text-gray-500">
-              {formContabilizar
-                ? "Os pontos deste desafio serão somados ao total geral dos clãs."
-                : "Os pontos ficam apenas para controle interno, sem afetar o ranking."}
-            </p>
-          </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-700">
-                Clãs e pontuação
-              </label>
-              <button
-                type="button"
-                onClick={addRegistroRow}
-                className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-              >
-                + Adicionar clã
-              </button>
-            </div>
-            {formRegistros.length === 0 ? (
-              <p className="text-sm text-gray-400 italic">
-                Nenhum clã adicionado.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {formRegistros.map((registro, i) => (
-                  <div key={i} className="flex gap-2 items-center">
-                    <select
-                      value={registro.clan}
-                      onChange={(e) =>
-                        updateRegistroRow(i, "clan", e.target.value)
-                      }
-                      className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="">Selecione um clã</option>
-                      {clanOptionsFor(i).map((r) => (
-                        <option key={r.clan} value={r.clan}>
-                          {r.clan}
-                        </option>
+            <div>
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">Pontos por clã</h4>
+              {Object.keys(desafioDetalhe.pontos_por_clan).length === 0 ? (
+                <p className="text-gray-500 text-sm">Nenhum ponto contabilizado ainda.</p>
+              ) : (
+                <div
+                  className="bg-white rounded-xl border border-gray-200 overflow-hidden"
+                  data-testid="pontos-por-clan"
+                >
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+                        <th className="py-2 px-4 font-medium">Clã</th>
+                        <th className="py-2 px-4 font-medium text-right">Pontos</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(desafioDetalhe.pontos_por_clan).map(([clan, pontos]) => (
+                        <tr key={clan} className="border-b border-gray-100">
+                          <td className="py-2 px-4 font-medium text-gray-700">{clan}</td>
+                          <td className="py-2 px-4 text-right font-bold text-indigo-600">
+                            {pontos.toLocaleString("pt-BR")}
+                          </td>
+                        </tr>
                       ))}
-                    </select>
-                    <input
-                      type="number"
-                      min={0}
-                      value={registro.pontos}
-                      onChange={(e) =>
-                        updateRegistroRow(i, "pontos", e.target.value)
-                      }
-                      className="w-32 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      placeholder="0"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeRegistroRow(i)}
-                      className="text-red-500 hover:text-red-700 px-2 text-sm"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
 
-        <div className="flex gap-3">
-          <button
-            onClick={handleSaveDesafio}
-            disabled={submitting}
-            className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {submitting ? "Salvando..." : "Salvar Desafio"}
-          </button>
-          <button
-            onClick={() => setMode("list")}
-            className="bg-white text-gray-600 border border-gray-300 px-6 py-2 rounded-lg font-medium hover:bg-gray-50 transition-colors"
-          >
-            Cancelar
-          </button>
-        </div>
+            <div>
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">Pontos por coach</h4>
+              {Object.keys(desafioDetalhe.pontos_por_coach).length === 0 ? (
+                <p className="text-gray-500 text-sm">Nenhum ponto de coach contabilizado ainda.</p>
+              ) : (
+                <div
+                  className="bg-white rounded-xl border border-gray-200 overflow-hidden"
+                  data-testid="pontos-por-coach"
+                >
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+                        <th className="py-2 px-4 font-medium">Coach</th>
+                        <th className="py-2 px-4 font-medium text-right">Pontos</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(desafioDetalhe.pontos_por_coach).map(([coach, pontos]) => (
+                        <tr key={coach} className="border-b border-gray-100">
+                          <td className="py-2 px-4 font-medium text-gray-700">{coach}</td>
+                          <td className="py-2 px-4 text-right font-bold text-indigo-600">
+                            {pontos.toLocaleString("pt-BR")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <DesafioFilters value={filtros} onChange={setFiltros} statusOptions={SUBMISSION_STATUS_OPTIONS} />
+
+            <div>
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                Submissões ({submissoesFiltradas.length})
+              </h4>
+
+              {submissoes.length === SUBMISSOES_LIMIT && (
+                <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs mb-2">
+                  Mostrando as primeiras {SUBMISSOES_LIMIT} submissões; o filtro de período se aplica apenas a esta
+                  página.
+                </p>
+              )}
+
+              {erroSubmissoes && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-2">
+                  {erroSubmissoes}
+                </div>
+              )}
+
+              {loadingSubmissoes ? (
+                <p className="text-gray-500 text-sm">Carregando submissões...</p>
+              ) : submissoesFiltradas.length === 0 ? (
+                <p className="text-gray-500 text-sm">Nenhuma submissão encontrada para os filtros atuais.</p>
+              ) : (
+                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+                        <th className="py-2 px-4 font-medium">Token</th>
+                        <th className="py-2 px-4 font-medium">Clã</th>
+                        <th className="py-2 px-4 font-medium">Coach</th>
+                        <th className="py-2 px-4 font-medium">Status</th>
+                        <th className="py-2 px-4 font-medium text-right">Pontos</th>
+                        <th className="py-2 px-4 font-medium">Enviado em</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {submissoesFiltradas.map((s) => (
+                        <tr key={s.token} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-2 px-4">
+                            <button
+                              onClick={() => abrirSubmissao(s.token)}
+                              className="font-mono text-indigo-600 hover:underline text-left"
+                            >
+                              {s.token}
+                            </button>
+                          </td>
+                          <td className="py-2 px-4 text-gray-700">{s.clan ?? "—"}</td>
+                          <td className="py-2 px-4 text-gray-700">{s.coach ?? "—"}</td>
+                          <td className="py-2 px-4 text-gray-700">
+                            {SUBMISSION_STATUS_LABELS[s.status] ?? s.status}
+                          </td>
+                          <td className="py-2 px-4 text-right text-gray-700">{s.points}</td>
+                          <td className="py-2 px-4 text-gray-500">{formatDateTime(s.submitted_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        ) : null}
+      </div>
+    );
+  } else if (desafioView.name === "submissao") {
+    conteudoDesafios = (
+      <div className="space-y-6">
+        <button onClick={() => setDesafioView({ name: "lista" })} className="text-gray-500 hover:text-gray-700 text-sm">
+          ← Voltar
+        </button>
+
+        {erroSubmissao && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{erroSubmissao}</div>
+        )}
+
+        {loadingSubmissao ? (
+          <p className="text-gray-500">Carregando submissão...</p>
+        ) : submissaoAtual ? (
+          <SubmissionDetail
+            submissao={submissaoAtual}
+            onShowVersions={() => abrirVersoes(submissaoAtual.token)}
+            onOpenSyncRun={abrirExecucao}
+          />
+        ) : null}
+      </div>
+    );
+  } else {
+    // desafioView.name === "versoes"
+    conteudoDesafios = (
+      <div className="space-y-6">
+        <button
+          onClick={() => setDesafioView({ name: "submissao", token: desafioView.token })}
+          className="text-gray-500 hover:text-gray-700 text-sm"
+        >
+          ← Voltar
+        </button>
+
+        <h3 className="text-lg font-bold text-gray-800">Histórico de versões</h3>
+
+        {erroVersoes && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{erroVersoes}</div>
+        )}
+
+        {loadingVersoes ? (
+          <p className="text-gray-500">Carregando histórico...</p>
+        ) : versoes.length === 0 ? (
+          <p className="text-gray-500">Nenhuma versão registrada para este token.</p>
+        ) : (
+          <div className="space-y-4">
+            {versoes.map((v) => (
+              <div key={v.id} className="bg-white rounded-xl border border-gray-200 p-4 space-y-3 text-sm">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h4 className="font-semibold text-gray-800">Versão {v.version_number}</h4>
+                  <button
+                    type="button"
+                    onClick={() => abrirExecucao(v.sync_run_id)}
+                    className="text-indigo-600 hover:underline text-xs"
+                  >
+                    Execução #{v.sync_run_id}
+                  </button>
+                </div>
+
+                <p className="text-gray-500">Observado em: {formatDateTime(v.observed_at)}</p>
+
+                <div>
+                  <p className="text-gray-500">Motivo:</p>
+                  <p className="font-medium text-gray-800">{v.change_reason}</p>
+                </div>
+
+                <p>
+                  Δ pontos:{" "}
+                  <strong className={v.point_delta >= 0 ? "text-green-600" : "text-red-600"}>
+                    {v.point_delta >= 0 ? "+" : ""}
+                    {v.point_delta}
+                  </strong>
+                </p>
+
+                <div>
+                  <p className="font-medium text-gray-700 mb-1">Δ por clã</p>
+                  <ClanDeltaList deltas={v.clan_deltas} />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Estado anterior</p>
+                    <pre className="bg-gray-50 rounded p-2 text-xs overflow-x-auto">
+                      {v.previous_state ? JSON.stringify(v.previous_state, null, 2) : "—"}
+                    </pre>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Estado atual</p>
+                    <pre className="bg-gray-50 rounded p-2 text-xs overflow-x-auto">
+                      {JSON.stringify(v.current_state, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
 
-  // --- Detail mode (somente leitura) ---
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              setMode("list");
-              setSelectedDesafio(null);
-            }}
-            className="text-gray-500 hover:text-gray-700 text-sm"
-          >
-            ← Desafios
-          </button>
-          <h2 className="text-2xl font-bold text-gray-800">
-            {selectedDesafio?.nome}
-          </h2>
-          {selectedDesafio && (
-            <span
-              className={`px-2 py-0.5 rounded text-xs font-medium ${
-                selectedDesafio.contabilizar_pontos
-                  ? "bg-green-100 text-green-700"
-                  : "bg-gray-100 text-gray-600"
-              }`}
-            >
-              {selectedDesafio.contabilizar_pontos
-                ? "Registrar Pontos"
-                : "Não Registrar Pontos"}
-            </span>
-          )}
-          {selectedDesafio && (
-            <span className="text-sm text-gray-500">
-              {formatPeriodo(selectedDesafio)}
-            </span>
-          )}
-        </div>
-        <div className="flex gap-3">
-          {sheetBtn}
-          {selectedDesafio && selectedDesafio.origem !== "csv_import" && (
-            <button
-              onClick={() => openEditForm(selectedDesafio)}
-              className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
-            >
-              Editar
-            </button>
-          )}
-        </div>
-      </div>
+  // --- Aba Sincronizações ---
 
-      {alertError}
-      {alertSuccess}
-      {alertSheet}
+  let conteudoSincronizacoes: React.ReactNode;
 
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-2">
-          Clãs registrados ({registros.length})
-        </h3>
-        {registros.length === 0 ? (
-          <p className="text-gray-500 text-sm">
-            Nenhum clã registrado neste desafio ainda.
-          </p>
+  if (syncView.name === "lista") {
+    conteudoSincronizacoes = (
+      <div className="space-y-4">
+        {erroExecucoes && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{erroExecucoes}</div>
+        )}
+
+        {loadingExecucoes ? (
+          <p className="text-gray-500">Carregando sincronizações...</p>
+        ) : execucoes.length === 0 ? (
+          <p className="text-gray-500">Nenhuma sincronização registrada.</p>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
-                  <th className="py-3 px-4 font-medium">Clã</th>
-                  <th className="py-3 px-4 font-medium text-right">Pontos</th>
+                  <th className="py-3 px-4 font-medium">Execução</th>
+                  <th className="py-3 px-4 font-medium">Iniciada em</th>
+                  <th className="py-3 px-4 font-medium">Status</th>
+                  <th className="py-3 px-4 font-medium text-center">Linhas</th>
+                  <th className="py-3 px-4 font-medium text-center">Criados/Arquivados/Reativados</th>
                 </tr>
               </thead>
               <tbody>
-                {registros.map((reg) => (
-                  <tr
-                    key={reg.id}
-                    className="border-b border-gray-100 hover:bg-gray-50"
-                  >
-                    <td className="py-3 px-4 font-medium text-gray-700">
-                      {reg.clan}
+                {execucoes.map((e) => (
+                  <tr key={e.id} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="py-3 px-4">
+                      <button
+                        onClick={() => setSyncView({ name: "detalhe", runId: e.id })}
+                        className="font-medium text-indigo-600 hover:underline"
+                      >
+                        #{e.id}
+                      </button>
                     </td>
-                    <td className="py-3 px-4 text-right font-bold text-indigo-600">
-                      {reg.total_pontos.toLocaleString("pt-BR")}
+                    <td className="py-3 px-4 text-gray-600">{formatDateTime(e.started_at)}</td>
+                    <td className="py-3 px-4 text-gray-600">{e.status}</td>
+                    <td className="py-3 px-4 text-center text-gray-600">{e.sheet_row_count}</td>
+                    <td className="py-3 px-4 text-center text-gray-600">
+                      {e.challenges_created} / {e.challenges_archived} / {e.challenges_reactivated}
                     </td>
                   </tr>
                 ))}
@@ -653,6 +794,59 @@ export default function Desafios() {
           </div>
         )}
       </div>
+    );
+  } else {
+    conteudoSincronizacoes = (
+      <div className="space-y-6">
+        <button
+          onClick={() => setSyncView({ name: "lista" })}
+          className="text-gray-500 hover:text-gray-700 text-sm"
+        >
+          ← Sincronizações
+        </button>
+
+        {erroExecucao && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{erroExecucao}</div>
+        )}
+
+        {loadingExecucao ? (
+          <p className="text-gray-500">Carregando execução...</p>
+        ) : execucaoAtual ? (
+          <SyncRunDetail execucao={execucaoAtual} />
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <h2 className="text-2xl font-bold text-gray-800">Desafios</h2>
+        {tokenSearchBox}
+      </div>
+
+      {erroBuscaToken && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{erroBuscaToken}</div>
+      )}
+
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setAba("desafios")}
+            className={tabClass(aba === "desafios")}
+          >
+            Desafios
+          </button>
+          <button
+            onClick={() => setAba("sincronizacoes")}
+            className={tabClass(aba === "sincronizacoes")}
+          >
+            Sincronizações
+          </button>
+        </nav>
+      </div>
+
+      {aba === "desafios" ? conteudoDesafios : conteudoSincronizacoes}
     </div>
   );
 }

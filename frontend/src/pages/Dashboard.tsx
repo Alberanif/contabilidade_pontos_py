@@ -14,6 +14,7 @@ import {
   type HistoricoResponse,
 } from "../api/client";
 import ClanCard from "../components/ClanCard";
+import ExecutionResult from "../components/ExecutionResult";
 import PendingAliasesCard from "../components/PendingAliasesCard";
 
 const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
@@ -339,6 +340,14 @@ export default function Dashboard() {
               ))}
             </ul>
           )}
+
+          <ExecutionResult
+            desafios={result.desafios}
+            onConfirmed={() => {
+              loadData();
+              loadRanking();
+            }}
+          />
         </div>
       )}
 

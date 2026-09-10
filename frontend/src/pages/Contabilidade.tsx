@@ -7,6 +7,7 @@ import {
   type ReprocessarResponse,
   type ImportarInicialResponse,
 } from "../api/client";
+import ExecutionResult from "../components/ExecutionResult";
 
 export default function Contabilidade() {
   const [executing, setExecuting] = useState(false);
@@ -259,6 +260,8 @@ export default function Contabilidade() {
               </ul>
             </div>
           )}
+
+          {!isReprocessResult(result) && <ExecutionResult desafios={result.desafios} />}
         </div>
       )}
     </div>

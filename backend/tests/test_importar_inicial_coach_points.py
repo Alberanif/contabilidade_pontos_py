@@ -88,6 +88,7 @@ class TestProBonoAlways10Pts:
              patch("supabase_client.upsert_coach_total", return_value={}), \
              patch("supabase_client.get_all_pending_clans", return_value=[]), \
              patch("supabase_client.get_all_pending_coaches", return_value=[]), \
+             patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.get_coach_alias_map", return_value={}):
             importar_inicial()
 
@@ -129,6 +130,7 @@ class TestIndividualCoachingAlways30Pts:
              patch("supabase_client.upsert_coach_total", return_value={}), \
              patch("supabase_client.get_all_pending_clans", return_value=[]), \
              patch("supabase_client.get_all_pending_coaches", return_value=[]), \
+             patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.get_coach_alias_map", return_value={}):
             importar_inicial()
 
@@ -143,3 +145,51 @@ class TestIndividualCoachingAlways30Pts:
         ci = self._run("15/04/2026")
         assert len(ci) == 1
         assert ci[0]["pontos_coach"] == 30
+
+
+class TestImportarInicialSomaDesafioNoTotalDoCoach:
+    """Fase 2: importar_inicial semeia get_tipo_coach_totals('desafios') no total
+    geral do coach (o breakdown pagante/pro-bono continua intacto).
+
+    Mesmo esqueleto de mock de TestIndividualCoachingAlways30Pts._run, trocando
+    só a asserção final: aqui capturamos as chamadas a upsert_coach_total.
+    """
+
+    def test_importar_inicial_soma_desafio_no_total_do_coach(self):
+        header = [f"col_{i}" for i in range(12)]
+        row = _ci_row("15/03/2026")
+        pb_header = [f"col_{i}" for i in range(11)]
+        inserted: list[dict] = []
+
+        def capture(rec):
+            inserted.append(rec)
+            return rec
+
+        with patch("supabase_client.delete_all_registros", return_value=0), \
+             patch("supabase_client.reset_all_totals"), \
+             patch("google_sheets_client.fetch_records", return_value=[header, row]), \
+             patch("google_sheets_client.fetch_records_pro_bono", return_value=[pb_header]), \
+             patch("google_sheets_client.fetch_ranking",
+                   return_value=[{"clan": "CLÃ 1", "total_pontos": 30}]), \
+             patch("supabase_client.insert_processed_record", side_effect=capture), \
+             patch("supabase_client.get_tipo_clan_totals", return_value={}), \
+             patch("supabase_client.upsert_clan_total", return_value={}), \
+             patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert_coach, \
+             patch("supabase_client.get_all_pending_clans", return_value=[]), \
+             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
+             patch("supabase_client.get_tipo_coach_totals",
+                   return_value={"Coach A": 20}) as mock_tipo_coach, \
+             patch("supabase_client.get_coach_alias_map", return_value={}):
+            importar_inicial()
+
+        # (a) get_tipo_coach_totals foi consultada para a fatia de desafio
+        mock_tipo_coach.assert_any_call("desafios")
+
+        # (b) "Coach A" tem 30 pts de Coaching Individual (seed) + 20 de desafio.
+        #     O breakdown (total_pagante=30, total_pro_bono=0) não muda.
+        mock_upsert_coach.assert_any_call(
+            "Coach A", 50,
+            pessoas_em_espera=0,
+            total_pagante=30,
+            total_pro_bono=0,
+        )

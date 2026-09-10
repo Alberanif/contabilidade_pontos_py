@@ -5,7 +5,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import config  # noqa: F401 — valida variáveis de ambiente ao importar
-from routers import contabilidade, registros, clans, coaches, desafios, desafio_import
+from logging_config import configure_logging
+from routers import (
+    contabilidade,
+    registros,
+    clans,
+    coaches,
+    desafios,
+    desafio_auditoria,
+    desafio_import,
+)
+
+configure_logging()
 
 app = FastAPI(
     title="Calcula Pontos Ultimate",
@@ -25,7 +36,16 @@ app.include_router(contabilidade.router, prefix="/api/contabilidade", tags=["Con
 app.include_router(registros.router, prefix="/api/registros", tags=["Registros"])
 app.include_router(clans.router, prefix="/api/clans", tags=["Clãs"])
 app.include_router(coaches.router, prefix="/api/coaches", tags=["Coaches"])
+
+# `desafios.router` (5 escritas bloqueadas com HTTP 410 — issue #17) e
+# `desafio_auditoria.router` (7 leituras de auditoria — issue #18) são dois
+# APIRouters mantidos em arquivos separados por responsabilidade, montados
+# aqui no mesmo prefixo "/api/desafios" via duas chamadas a `include_router`.
+# Isso é seguro porque não há colisão de (método, path) entre eles: todas as
+# rotas de `desafios.router` são POST/PUT/DELETE e todas as de
+# `desafio_auditoria.router` são GET.
 app.include_router(desafios.router, prefix="/api/desafios", tags=["Desafios"])
+app.include_router(desafio_auditoria.router, prefix="/api/desafios", tags=["Desafios"])
 app.include_router(desafio_import.router, prefix="/api/desafios/importar", tags=["Desafios"])
 
 

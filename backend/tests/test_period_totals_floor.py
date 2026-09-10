@@ -207,42 +207,73 @@ class TestGetTipoCoachTotalsFloor:
         assert result["Coach A"] == 10
 
 
-def _mock_sequential_client(desafios_rows, registros_rows):
-    result_desafios = MagicMock()
-    result_desafios.data = desafios_rows
-    chain_desafios = MagicMock()
-    chain_desafios.execute.return_value = result_desafios
-    for m in ("table", "select", "gte", "lte", "eq"):
-        getattr(chain_desafios, m).return_value = chain_desafios
+def _mock_active_counted_paged(rows):
+    """Mock paginado de `fetch_active_counted_desafio_submissions`: uma
+    página com `rows`, depois uma página vazia (fim da varredura)."""
+    calls = {"n": 0}
+    chain = MagicMock()
+    for m in ("table", "select", "eq", "order", "range"):
+        getattr(chain, m).return_value = chain
 
-    result_registros = MagicMock()
-    result_registros.data = registros_rows
-    chain_registros = MagicMock()
-    chain_registros.execute.return_value = result_registros
-    for m in ("table", "select", "in_"):
-        getattr(chain_registros, m).return_value = chain_registros
+    def _execute():
+        calls["n"] += 1
+        result = MagicMock()
+        result.data = rows if calls["n"] == 1 else []
+        return result
 
+    chain.execute.side_effect = _execute
     client = MagicMock()
-    client.table.side_effect = [chain_desafios, chain_registros]
+    client.table.return_value = chain
     return client
 
 
+class TestGetTipoClanTotalsDesafiosNaoAplicaFloor:
+    """Pontos de desafio (tokens `active_counted`) não passam pela lógica de
+    lote/floor de pagante/pro_bono: `points` de cada token entra somado como
+    veio, sem arredondar para baixo em múltiplos de `POINTS_PER_BATCH_GROUP`
+    (issue #19 / Task 8)."""
+
+    def test_pontos_de_desafio_nao_sao_agrupados_em_lotes(self):
+        # 6 pts é justamente o valor que, em pagante/pro_bono, o floor de lote
+        # zeraria por não completar um grupo — aqui não há floor: entra como 6.
+        rows = [
+            {
+                "clan": "CLÃ 1",
+                "points": 6,
+                "status": "active_counted",
+                "submitted_at": "2026-01-15T12:00:00+00:00",
+            },
+        ]
+        client = _mock_active_counted_paged(rows)
+        with patch("supabase_client._get_client", return_value=client):
+            result = supabase_client.get_tipo_clan_totals("desafios", INICIO, FIM)
+        assert result["CLÃ 1"] == 6
+
+
 class TestGetPeriodDesafioCoachTotals:
+    """Fase 2: agrega os tokens `active_counted` de `desafio_submissions_current`
+    por coach canônico (coluna B / `raw_name`), filtrando pela data local SP de
+    `submitted_at` — antes lia a tabela legada `desafio_registros_coach`."""
 
     def test_soma_pontos_de_coach_dos_desafios_no_periodo(self):
-        desafios_rows = [{"id": 1}]
-        registros_rows = [
-            {"coach": "Ana Albertim", "total_pontos": 20},
-            {"coach": "Ana Albertim", "total_pontos": 10},
-            {"coach": "Gustavo Imhof", "total_pontos": 10},
+        rows = [
+            {"token": "T1", "raw_name": "Ana Albertim", "points": 20,
+             "status": "active_counted", "submitted_at": "2026-01-10T13:00:00-03:00"},
+            {"token": "T2", "raw_name": "ana  albertim", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-01-20T13:00:00-03:00"},
+            {"token": "T3", "raw_name": "Gustavo Imhof", "points": 10,
+             "status": "active_counted", "submitted_at": "2026-01-15T13:00:00-03:00"},
         ]
-        with patch("supabase_client._get_client",
-                   return_value=_mock_sequential_client(desafios_rows, registros_rows)):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=rows), \
+             patch("supabase_client.get_coach_alias_map",
+                   return_value={"ana albertim": "Ana Albertim"}):
             result = supabase_client.get_period_desafio_coach_totals(INICIO, FIM)
         assert result == {"Ana Albertim": 30, "Gustavo Imhof": 10}
 
     def test_sem_desafio_no_periodo_retorna_vazio(self):
-        with patch("supabase_client._get_client",
-                   return_value=_mock_sequential_client([], [])):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=[]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}):
             result = supabase_client.get_period_desafio_coach_totals(INICIO, FIM)
         assert result == {}

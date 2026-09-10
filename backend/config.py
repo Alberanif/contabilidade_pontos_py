@@ -34,6 +34,14 @@ GSHEET_RECORDS_SHEET_NAME = os.getenv("GSHEET_RECORDS_SHEET_NAME")
 GSHEET_TOTALS_SPREADSHEET_ID = os.getenv("GSHEET_TOTALS_SPREADSHEET_ID")
 GSHEET_TOTALS_SHEET_NAME = os.getenv("GSHEET_TOTALS_SHEET_NAME")
 
+# Planilha oficial de desafios. É validada somente quando a etapa de desafios
+# é executada, para não interromper as demais fontes de pontos.
+GSHEET_DESAFIOS_SPREADSHEET_ID = os.getenv("GSHEET_DESAFIOS_SPREADSHEET_ID")
+GSHEET_DESAFIOS_SHEET_NAME = os.getenv("GSHEET_DESAFIOS_SHEET_NAME")
+POINTS_PER_DESAFIO_SUBMISSION = int(
+    os.getenv("POINTS_PER_DESAFIO_SUBMISSION", "10")
+)
+
 # Planilha de Registros Pro-bono (opcional — não interrompe startup se ausente)
 GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID = os.getenv("GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID")
 GSHEET_RECORDS_PRO_BONO_SHEET_NAME = os.getenv("GSHEET_RECORDS_PRO_BONO_SHEET_NAME")

@@ -56,7 +56,6 @@ def test_coach_identity_resolution_e2e_flow():
         return {"alias": alias, "coach_canonico": coach_canonico}
 
     with patch("supabase_client.list_all_registros", return_value=mock_all_regs), \
-         patch("supabase_client.get_all_desafio_coach_names", return_value=set()), \
          patch("supabase_client.get_coach_alias_map", side_effect=lambda: mock_alias_map), \
          patch("supabase_client.get_pending_coach_aliases", side_effect=mock_get_pending), \
          patch("supabase_client.get_pending_coach_alias_by_id", side_effect=mock_get_pending_by_id), \
@@ -64,12 +63,11 @@ def test_coach_identity_resolution_e2e_flow():
          patch("supabase_client.update_pending_coach_alias_status", side_effect=mock_update_pending_status), \
          patch("supabase_client.insert_coach_alias", side_effect=mock_insert_alias), \
          patch("supabase_client.update_registros_coach", return_value=1), \
-         patch("supabase_client.update_desafio_importacao_linhas_coach", return_value=0), \
-         patch("supabase_client.merge_desafio_registros_coach", return_value=0), \
          patch("supabase_client.delete_coach_total"), \
          patch("supabase_client.upsert_coach_total") as mock_upsert_total, \
-         patch("supabase_client.get_desafio_coach_total", return_value=0), \
          patch("supabase_client.list_coach_totals", return_value=[{"coach": "Vinicius Marini"}]), \
+         patch("supabase_client.get_all_desafio_token_coach_names", return_value=set()), \
+         patch("supabase_client.get_tipo_coach_totals", return_value={}), \
          patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
          patch("config.GROQ_API_KEY", "mock_key"):
 

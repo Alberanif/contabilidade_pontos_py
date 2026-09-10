@@ -32,15 +32,13 @@ class TestReprocessarCoachesMergeERecalcula:
                     return_value={"Vini Marini": "Vinicius Marini"}), \
              patch("supabase_client.list_all_registros",
                    side_effect=[regs_antes, regs_depois]), \
-             patch("supabase_client.get_all_desafio_coach_names", return_value=set()), \
              patch("supabase_client.update_registros_coach", return_value=1) as mock_update, \
-             patch("supabase_client.update_desafio_importacao_linhas_coach", return_value=0), \
-             patch("supabase_client.merge_desafio_registros_coach", return_value=0), \
-             patch("supabase_client.get_desafio_coach_total", return_value=0), \
              patch("supabase_client.delete_coach_total") as mock_delete, \
              patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert, \
              patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
              patch("supabase_client.get_coach_carry_over", return_value=0), \
+             patch("supabase_client.get_all_desafio_token_coach_names", return_value=set()), \
+             patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.list_coach_totals", return_value=[
                  {"coach": "Vinicius Marini", "total_pontos": 40,
                   "total_pagante": 30, "total_pro_bono": 10, "pessoas_em_espera": 0},
@@ -62,8 +60,9 @@ class TestReprocessarCoachesMergeERecalcula:
 
         with patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.list_all_registros", return_value=regs), \
-             patch("supabase_client.get_all_desafio_coach_names", return_value=set()), \
              patch("supabase_client.list_coach_totals", return_value=[]), \
+             patch("supabase_client.get_all_desafio_token_coach_names", return_value=set()), \
+             patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.update_registros_coach") as mock_update, \
              patch("supabase_client.delete_coach_total") as mock_delete, \
              patch("supabase_client.upsert_coach_total") as mock_upsert:
@@ -80,7 +79,9 @@ class TestReprocessarCoachesMergeERecalcula:
         with patch("supabase_client.get_coach_alias_map",
                     return_value={"A": "B", "B": "C"}), \
              patch("supabase_client.list_all_registros", return_value=[]), \
-             patch("supabase_client.get_all_desafio_coach_names", return_value=set()), \
+             patch("supabase_client.list_coach_totals", return_value=[]), \
+             patch("supabase_client.get_all_desafio_token_coach_names", return_value=set()), \
+             patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.update_registros_coach"), \
              patch("supabase_client.delete_coach_total"), \
              patch("supabase_client.upsert_coach_total"):
@@ -89,34 +90,53 @@ class TestReprocessarCoachesMergeERecalcula:
         assert len(resultado.avisos) == 1
         assert "A" in resultado.avisos[0] and "B" in resultado.avisos[0] and "C" in resultado.avisos[0]
 
-    def test_funde_alias_de_coach_que_so_existe_em_desafio(self):
-        """Coach que nunca apareceu em pontos_ultimate_registros_contabilizados
-        (só tem pontos de desafio CSV) ainda deve ser fundido pela reprocessagem."""
+    def test_coach_que_so_existe_em_desafio_e_descoberto_e_fundido(self):
+        """Fase 2: um coach cujo nome bruto só aparece nos tokens de desafio é
+        descoberto por get_all_desafio_token_coach_names e resolvido ao canônico."""
         with patch("supabase_client.get_coach_alias_map",
                     return_value={"Vini Marini": "Vinicius Marini"}), \
              patch("supabase_client.list_all_registros", return_value=[]), \
-             patch("supabase_client.get_all_desafio_coach_names", return_value={"Vini Marini"}), \
+             patch("supabase_client.list_coach_totals", return_value=[]), \
+             patch("supabase_client.get_all_desafio_token_coach_names",
+                   return_value={"Vini Marini"}), \
+             patch("supabase_client.get_tipo_coach_totals",
+                   return_value={"Vinicius Marini": 20}), \
              patch("supabase_client.update_registros_coach", return_value=0), \
-             patch("supabase_client.delete_coach_total") as mock_delete, \
-             patch("supabase_client.update_desafio_importacao_linhas_coach", return_value=2) as mock_update_linhas, \
-             patch("supabase_client.merge_desafio_registros_coach", return_value=1) as mock_merge, \
-             patch("supabase_client.get_desafio_coach_total", return_value=25) as mock_desafio_total, \
+             patch("supabase_client.delete_coach_total"), \
              patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
              patch("supabase_client.get_coach_carry_over", return_value=0), \
-             patch("supabase_client.list_coach_totals", return_value=[
-                 {"coach": "Vinicius Marini", "total_pontos": 25,
-                  "total_pagante": 0, "total_pro_bono": 0, "pessoas_em_espera": 0},
-             ]), \
              patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert:
             resultado = reprocessar_coaches()
 
-        mock_update_linhas.assert_called_once_with("Vini Marini", "Vinicius Marini")
-        mock_merge.assert_called_once_with("Vini Marini", "Vinicius Marini")
-        mock_desafio_total.assert_called_once_with("Vinicius Marini")
-        mock_delete.assert_called_once_with("Vini Marini")
+        assert resultado.coaches_afetados == ["Vinicius Marini"]
         mock_upsert.assert_any_call(
-            "Vinicius Marini", 25,
+            "Vinicius Marini", 20,
             pessoas_em_espera=0, total_pagante=0, total_pro_bono=0,
         )
-        assert resultado.coaches_afetados == ["Vinicius Marini"]
-        assert resultado.totais_recalculados == {"Vinicius Marini": 25}
+
+    def test_reprocessar_coaches_le_tokens_de_desafio_nao_a_tabela_legada(self):
+        """Fase 2: a descoberta e o recálculo de coach usam os tokens
+        (get_all_desafio_token_coach_names, get_tipo_coach_totals('desafios')),
+        nunca desafio_registros_coach."""
+        regs_antes = [_registro("Vivian Gaspar", "Coaching Individual", 30)]
+        regs_depois = [_registro("Vivian Gaspar Canonico", "Coaching Individual", 30)]
+
+        with patch("supabase_client.get_coach_alias_map",
+                    return_value={"Vivian Gaspar": "Vivian Gaspar Canonico"}), \
+             patch("supabase_client.list_all_registros", side_effect=[regs_antes, regs_depois]), \
+             patch("supabase_client.list_coach_totals", return_value=[]), \
+             patch("supabase_client.get_all_desafio_token_coach_names", return_value=set()), \
+             patch("supabase_client.get_tipo_coach_totals", return_value={"Vivian Gaspar Canonico": 10}), \
+             patch("supabase_client.update_registros_coach", return_value=1), \
+             patch("supabase_client.delete_coach_total"), \
+             patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
+             patch("supabase_client.get_coach_carry_over", return_value=0), \
+             patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert:
+            resultado = reprocessar_coaches()
+
+        # 30 (CI) + 10 (desafio) = 40
+        assert resultado.totais_recalculados == {"Vivian Gaspar Canonico": 40}
+        mock_upsert.assert_any_call(
+            "Vivian Gaspar Canonico", 40,
+            pessoas_em_espera=0, total_pagante=30, total_pro_bono=0,
+        )

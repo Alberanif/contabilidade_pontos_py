@@ -98,6 +98,31 @@ export function deleteRegistro(id: number): Promise<{ mensagem: string; novo_tot
 
 // --- Contabilidade ---
 
+// Resultado da sincronização de desafios (Google Sheets) executada como parte
+// de POST /api/contabilidade/executar. Espelha `DesafioSyncResult` em
+// backend/desafio_sync_service.py — os nomes/tipos dos campos devem
+// permanecer idênticos aos do Pydantic model.
+export interface DesafioSyncResult {
+  status: string; // "success" | "failed" | "awaiting_confirmation" | "already_running"
+  run_id: number | null;
+  snapshot_hash: string | null;
+  sheet_row_count: number;
+  state_counts: Record<string, number>;
+  clan_deltas: Record<string, number>;
+  clan_totals_after: Record<string, number>;
+  challenges_created: number;
+  challenges_archived: number;
+  challenges_reactivated: number;
+  tokens_versioned: number;
+  duration_seconds: number;
+  mensagem: string;
+  // Só relevantes quando status === "awaiting_confirmation".
+  active_tokens_before: number | null;
+  mass_removal_required: boolean;
+  mass_removal_count: number;
+  mass_removal_ratio: number;
+}
+
 export interface ExecutarResponse {
   novos_registros: number;
   novos_pendentes: number;
@@ -108,12 +133,18 @@ export interface ExecutarResponse {
   pontos_por_coach: Record<string, number>;
   pendentes_por_coach: Record<string, number>;
   totais_atualizados: Record<string, number>;
+  desafios: DesafioSyncResult;
   mensagem: string;
 }
 
-export interface ReprocessarResponse extends ExecutarResponse {
+// POST /api/contabilidade/reprocessar nunca chama a sincronização de
+// desafios (ver backend/routers/contabilidade.py::reprocessar_contabilidade),
+// então este tipo NÃO herda `desafios` de ExecutarResponse — herdar via
+// `extends` faria o TypeScript mentir que todo ReprocessarResponse também tem
+// esse campo.
+export type ReprocessarResponse = Omit<ExecutarResponse, "desafios"> & {
   registros_removidos: number;
-}
+};
 
 export interface AprovarClanResponse {
   clan: string;
@@ -171,6 +202,25 @@ export function reprocessarContabilidade(): Promise<ReprocessarResponse> {
   return request("/api/contabilidade/reprocessar", { method: "POST" });
 }
 
+// Confirma (ou recusa) a aplicação de um plano de sincronização de desafios
+// que retornou status "awaiting_confirmation" por exigir remoção em massa
+// (RF-17). O backend só precisa do `snapshot_hash` da prévia — não existe
+// `run_id` de entrada; se a planilha/estado mudou nesse meio-tempo, o backend
+// rejeita o hash obsoleto e devolve um DesafioSyncResult "failed" refletindo
+// a realidade atual (nunca aplica o plano antigo por engano).
+export function confirmarDesafios(
+  snapshotHash: string,
+  confirmarRemocaoEmMassa: boolean
+): Promise<DesafioSyncResult> {
+  return request("/api/contabilidade/confirmar-desafios", {
+    method: "POST",
+    body: JSON.stringify({
+      snapshot_hash: snapshotHash,
+      confirmar_remocao_em_massa: confirmarRemocaoEmMassa,
+    }),
+  });
+}
+
 export interface ImportarInicialResponse {
   registros_removidos: number;
   coaching_individual_importados: number;
@@ -221,160 +271,154 @@ export function fetchTotaisPorTipo(
   return request(`/api/contabilidade/totais-por-tipo?${params}`);
 }
 
-// --- Desafios ---
+// --- Desafios: auditoria somente leitura ---
+//
+// A tela de Desafios (frontend/src/pages/Desafios.tsx) é uma consulta/auditoria
+// somente leitura sobre os dados sincronizados da Google Sheet — não existe
+// mais nenhuma escrita de desafio pelo frontend (criar/editar/excluir desafio
+// ou registro, e o antigo assistente de importação via CSV foram removidos;
+// todo endpoint mutável equivalente no backend responde 410). Os tipos e
+// funções abaixo espelham os Pydantic models de
+// `backend/routers/desafio_auditoria.py` — nomes/tipos devem permanecer
+// idênticos aos de lá.
 
-export interface DesafioCampo {
-  id: number;
-  desafio_id: number;
-  nome: string;
-  tipo: 'texto' | 'pontuacao';
-  ordem: number;
-}
-
-export interface Desafio {
+export interface DesafioAuditoria {
   id: number;
   nome: string;
   contabilizar_pontos: boolean;
-  data: string;
-  data_inicio?: string;
-  data_fim?: string;
-  origem?: string;
-  campos: DesafioCampo[];
-  total_registros: number;
+  data: string | null;
+  data_inicio: string | null;
+  data_fim: string | null;
+  origem: string;
+  nome_normalizado: string | null;
+  status: string; // "ativo" | "arquivado" (valor bruto do banco)
+  arquivado_at: string | null;
+  reativado_at: string | null;
+  updated_at: string;
   created_at: string;
 }
 
-export interface DesafioRegistro {
-  id: number;
-  desafio_id: number;
-  clan: string;
-  valores: Record<string, string | number>;
-  total_pontos: number;
-  created_at: string;
-}
-
-export function fetchDesafios(): Promise<Desafio[]> {
-  return request('/api/desafios');
-}
-
-export interface DesafioRegistroInput {
-  clan: string;
-  pontos: number;
-}
-
-export function createDesafio(data: {
-  nome: string;
-  contabilizar_pontos: boolean;
-  data_inicio: string;
-  data_fim: string;
-  registros: DesafioRegistroInput[];
-}): Promise<Desafio> {
-  return request('/api/desafios', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export function updateDesafio(
-  id: number,
-  data: {
-    nome: string;
-    contabilizar_pontos: boolean;
-    data_inicio: string;
-    data_fim: string;
-    registros: DesafioRegistroInput[];
-  }
-): Promise<Desafio> {
-  return request(`/api/desafios/${id}`, { method: 'PUT', body: JSON.stringify(data) });
-}
-
-export function deleteDesafio(id: number): Promise<{ mensagem: string }> {
-  return request(`/api/desafios/${id}`, { method: 'DELETE' });
-}
-
-export function fetchDesafioRegistros(desafioId: number): Promise<DesafioRegistro[]> {
-  return request(`/api/desafios/${desafioId}/registros`);
-}
-
-export function createDesafioRegistro(
-  desafioId: number,
-  data: { clan: string; valores: Record<string, string> }
-): Promise<DesafioRegistro> {
-  return request(`/api/desafios/${desafioId}/registros`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
-
-export function deleteDesafioRegistro(
-  desafioId: number,
-  registroId: number
-): Promise<{ mensagem: string }> {
-  return request(`/api/desafios/${desafioId}/registros/${registroId}`, {
-    method: 'DELETE',
-  });
-}
-
-// --- Importação de Desafios via CSV ---
-
-export interface ImportPreviewResult {
+export interface DesafioAuditoriaDetalhe extends DesafioAuditoria {
   pontos_por_clan: Record<string, number>;
-  participacoes_por_clan: Record<string, number>;
-  avisos: string[];
-  total_linhas_contabilizadas: number;
+  pontos_por_coach: Record<string, number>;
 }
 
-export interface ImportConfig {
-  nome: string;
-  desafio_id?: number;
-  data_inicio: string;
-  data_fim: string;
-  pontos_por_participacao: number;
-}
-
-export type ColumnMapping = {
-  clan: string;
-  nome: string;
-  validado: string;
-  submitted_at: string;
+// As 9 células brutas da planilha (colunas A-I), tanto na forma posicional
+// (`raw_cells`) quanto nomeada (`raw_clan_legacy` ... `raw_token`, na mesma
+// ordem das colunas).
+export interface DesafioSubmissao {
   token: string;
-};
-
-function buildImportFormData(file: File, mapping: ColumnMapping, config: ImportConfig): FormData {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('mapping', JSON.stringify(mapping));
-  formData.append('config', JSON.stringify(config));
-  return formData;
+  row_numbers: number[];
+  raw_cells: unknown[];
+  raw_clan_legacy: string | null;
+  raw_name: string | null;
+  coach: string | null;
+  raw_validation: string | null;
+  raw_link: string | null;
+  raw_observation: string | null;
+  raw_challenge: string | null;
+  raw_clan_current: string | null;
+  raw_submitted_at: string | null;
+  raw_token: string | null;
+  clan: string | null;
+  challenge_normalized: string | null;
+  desafio_id: number | null;
+  submitted_at: string | null;
+  status: string; // "active_counted" | "active_not_counted" | "invalid" | "conflicted" | "inactive_missing" | "blocked_by_guardrail"
+  invalid_reasons: string[];
+  points: number;
+  content_hash: string;
+  first_seen_run_id: number;
+  last_seen_run_id: number;
+  inactivated_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-async function requestImport<T>(path: string, file: File, mapping: ColumnMapping, config: ImportConfig): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    body: buildImportFormData(file, mapping, config),
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || `Erro ${res.status}`);
-  }
-  return res.json();
+export interface DesafioSubmissaoVersao {
+  id: number;
+  token: string;
+  sync_run_id: number;
+  version_number: number;
+  row_numbers: number[];
+  raw_cells: unknown[];
+  raw_clan_legacy: string | null;
+  raw_name: string | null;
+  coach: string | null;
+  raw_validation: string | null;
+  raw_link: string | null;
+  raw_observation: string | null;
+  raw_challenge: string | null;
+  raw_clan_current: string | null;
+  raw_submitted_at: string | null;
+  raw_token: string | null;
+  previous_state: Record<string, unknown> | null;
+  current_state: Record<string, unknown>;
+  previous_status: string | null;
+  current_status: string;
+  point_delta: number;
+  clan_deltas: Record<string, number>;
+  change_reason: string;
+  observed_at: string;
 }
 
-export function previewImportacaoDesafio(
-  file: File,
-  mapping: ColumnMapping,
-  config: ImportConfig
-): Promise<ImportPreviewResult> {
-  return requestImport('/api/desafios/importar/preview', file, mapping, config);
+export interface DesafioSincronizacao {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string; // "running" | "succeeded" | "failed" | "awaiting_confirmation" | "cancelled"
+  snapshot_hash: string | null;
+  sheet_row_count: number;
+  state_counts: Record<string, number>;
+  clan_deltas: Record<string, number>;
+  challenges_created: number;
+  challenges_archived: number;
+  challenges_reactivated: number;
+  points_per_submission: number;
+  mass_removal_required: boolean;
+  mass_removal_confirmed: boolean;
+  mass_removal_count: number;
+  error: Record<string, unknown> | null;
+  created_at: string;
 }
 
-export function confirmarImportacaoDesafio(
-  file: File,
-  mapping: ColumnMapping,
-  config: ImportConfig
-): Promise<Desafio> {
-  return requestImport('/api/desafios/importar/confirmar', file, mapping, config);
+export function fetchDesafiosAuditoria(
+  status: "active" | "archived" | "all" = "all"
+): Promise<DesafioAuditoria[]> {
+  return request(`/api/desafios?status=${status}`);
 }
 
-export function fetchDesafiosImportaveis(): Promise<Desafio[]> {
-  return request('/api/desafios?origem=csv_import');
+export function fetchDesafioAuditoria(id: number): Promise<DesafioAuditoriaDetalhe> {
+  return request(`/api/desafios/${id}`);
+}
+
+export function fetchSubmissoesDoDesafio(
+  id: number,
+  params?: { clan?: string; status?: string; limit?: number; offset?: number }
+): Promise<DesafioSubmissao[]> {
+  const query = new URLSearchParams();
+  if (params?.clan) query.set("clan", params.clan);
+  if (params?.status) query.set("status", params.status);
+  if (params?.limit) query.set("limit", String(params.limit));
+  if (params?.offset) query.set("offset", String(params.offset));
+  const qs = query.toString();
+  return request(`/api/desafios/${id}/submissoes${qs ? `?${qs}` : ""}`);
+}
+
+export function fetchSubmissaoPorToken(token: string): Promise<DesafioSubmissao> {
+  return request(`/api/desafios/submissoes/${encodeURIComponent(token)}`);
+}
+
+export function fetchVersoesDaSubmissao(token: string): Promise<DesafioSubmissaoVersao[]> {
+  return request(`/api/desafios/submissoes/${encodeURIComponent(token)}/versoes`);
+}
+
+export function fetchSincronizacoes(limit = 50, offset = 0): Promise<DesafioSincronizacao[]> {
+  return request(`/api/desafios/sincronizacoes?limit=${limit}&offset=${offset}`);
+}
+
+export function fetchSincronizacao(runId: number): Promise<DesafioSincronizacao> {
+  return request(`/api/desafios/sincronizacoes/${runId}`);
 }
 
 // --- Aliases de Coaches (IA / Groq) ---

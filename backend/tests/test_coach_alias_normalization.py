@@ -150,6 +150,7 @@ class TestImportarInicialMergeCoachBatch:
                    return_value={"Vini Marini": "Vinicius Marini"}), \
              patch("supabase_client.insert_processed_record", side_effect=capture), \
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \
+             patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.upsert_clan_total", return_value={}), \
              patch("supabase_client.upsert_coach_total", return_value={}), \
              patch("supabase_client.get_all_pending_clans", return_value=[]), \

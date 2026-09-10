@@ -7,6 +7,8 @@ import google_sheets_client
 import supabase_client
 import points_engine
 import coach_identity
+import desafio_sync_service
+from desafio_sync_service import DesafioSyncResult
 
 router = APIRouter()
 
@@ -214,7 +216,13 @@ class ExecutarResponse(BaseModel):
     pontos_por_coach: dict[str, int]
     pendentes_por_coach: dict[str, int]
     totais_atualizados: dict[str, int]
+    desafios: DesafioSyncResult
     mensagem: str
+
+
+class ConfirmarDesafiosRequest(BaseModel):
+    snapshot_hash: str
+    confirmar_remocao_em_massa: bool = False
 
 
 class ReprocessarResponse(BaseModel):
@@ -464,8 +472,10 @@ def reprocessar_coaches():
 
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
-        raw_coaches |= supabase_client.get_all_desafio_coach_names()
         raw_coaches |= {t["coach"] for t in supabase_client.list_coach_totals() if t.get("coach")}
+        # Fase 2: um coach cujo nome bruto só aparece nos tokens de desafio
+        # também precisa ser resolvido ao canônico.
+        raw_coaches |= supabase_client.get_all_desafio_token_coach_names()
 
         # Mapeamento implícito por normalize_key (resolve maiúsculas/minúsculas/acentos idênticos)
         # Prefere nome formatado com maiúsculas/minúsculas sobre ALL CAPS
@@ -488,14 +498,14 @@ def reprocessar_coaches():
 
             if canonical != raw_coach:
                 registros_atualizados += supabase_client.update_registros_coach(raw_coach, canonical)
-                supabase_client.update_desafio_importacao_linhas_coach(raw_coach, canonical)
-                supabase_client.merge_desafio_registros_coach(raw_coach, canonical)
                 coaches_afetados.add(canonical)
                 supabase_client.delete_coach_total(raw_coach)
 
         totais_recalculados: dict[str, int] = {}
         if coaches_afetados:
             all_regs = supabase_client.list_all_registros()
+
+        desafio_coach_totals = supabase_client.get_tipo_coach_totals("desafios")
 
         group_modalidades_upper = {m.upper() for m in GROUP_MODALIDADES}
         for canonical in coaches_afetados:
@@ -520,8 +530,8 @@ def reprocessar_coaches():
             lotes = group_people // config.BATCH_SIZE_GROUP
             novo_carry = group_people % config.BATCH_SIZE_GROUP
             group_pts = lotes * config.POINTS_PER_BATCH_GROUP
-            desafio_pts = supabase_client.get_desafio_coach_total(canonical)
             total_pagante = ci_pts + group_pts
+            desafio_pts = desafio_coach_totals.get(canonical, 0)
             total_pontos = total_pagante + pb_pts + desafio_pts
             supabase_client.upsert_coach_total(
                 canonical, total_pontos,
@@ -546,6 +556,51 @@ def reprocessar_coaches():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _refresh_desafio_coach_totals() -> None:
+    """Recompõe `totais_por_coach.total_pontos` incluindo a fatia de desafio
+    lida ao vivo dos tokens (`get_tipo_coach_totals('desafios')`). Idempotente e
+    auto-corretivo: `total = total_pagante + total_pro_bono + desafio`, iterado
+    sobre todos os coaches (um coach cuja contribuição de desafio caiu a zero
+    também é corrigido). Chamado ao fim de `/executar` e `/confirmar-desafios`;
+    o desafio nunca entra em `total_pagante`/`total_pro_bono`."""
+    desafio_coach = supabase_client.get_tipo_coach_totals("desafios")
+    existentes = {r["coach"]: r for r in supabase_client.list_coach_totals()}
+    for coach in set(existentes.keys()) | set(desafio_coach.keys()):
+        row = existentes.get(coach, {})
+        pagante = row.get("total_pagante") or 0
+        pro_bono = row.get("total_pro_bono") or 0
+        novo_total = pagante + pro_bono + desafio_coach.get(coach, 0)
+        # Idempotência: só escreve coaches novos ou cujo total de fato mudou —
+        # evita dezenas de writes sequenciais no caminho quente de /executar e
+        # reduz a janela de lost-update contra POST /aprovar-coach.
+        if coach in existentes and (row.get("total_pontos") or 0) == novo_total:
+            continue
+        supabase_client.upsert_coach_total(
+            coach,
+            novo_total,
+            pessoas_em_espera=row.get("pessoas_em_espera") or 0,
+            total_pagante=pagante,
+            total_pro_bono=pro_bono,
+        )
+
+
+def _sync_desafios_isolado() -> DesafioSyncResult:
+    """Sincroniza desafios isolado do restante do `/executar`.
+
+    Chamado uma única vez, antes de tocar nas demais fontes: assim, uma
+    falha nas demais fontes (tratada pelo try/except externo) nunca encontra
+    a sincronização de desafios parcialmente executada, e uma falha aqui
+    nunca invalida o que as demais fontes já processaram na mesma resposta.
+    `desafio_sync_service.sync_desafios` já não deveria lançar exceções (ela
+    mesma traduz qualquer falha em `DesafioSyncResult(status="failed", ...)`),
+    mas este `try/except` é a garantia final de isolamento.
+    """
+    try:
+        return desafio_sync_service.sync_desafios()
+    except Exception as e:  # noqa: BLE001 - isolamento final da fonte "desafios"
+        return DesafioSyncResult(status="failed", mensagem=str(e))
 
 
 class AprovarAliasPendenteRequest(BaseModel):
@@ -578,10 +633,15 @@ def sugerir_aliases_llm():
 
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
-        raw_coaches |= supabase_client.get_all_desafio_coach_names()
         totais = supabase_client.list_coach_totals()
         if totais:
             raw_coaches |= {t["coach"] for t in totais if t.get("coach")}
+
+        # Nomes da coluna B da planilha de desafios são texto livre do usuário final
+        # (qualidade menor que a planilha de pagantes): PRECISAM ser resolvidos, mas
+        # NUNCA podem entrar em `canonical_list` — um typo como "Vinicious Marinni"
+        # não pode virar alvo canônico que o LLM escolhe e auto-aprova a >=95%.
+        nomes_para_resolver = raw_coaches | supabase_client.get_all_desafio_token_coach_names()
 
         canonical_list = sorted(list(set(alias_map.values()) | raw_coaches))
 
@@ -589,7 +649,7 @@ def sugerir_aliases_llm():
         # 1. Não estão no alias_map como chave
         # 2. Não possuem correspondência de chave no alias_map
         unmapped_coaches = []
-        for raw in raw_coaches:
+        for raw in nomes_para_resolver:
             if raw in alias_map:
                 continue
             if coach_identity.normalize_key(raw) in alias_keys_norm:
@@ -597,7 +657,7 @@ def sugerir_aliases_llm():
             unmapped_coaches.append(raw)
 
 
-        print(f"[IA COACHES] Analisando {len(unmapped_coaches)} candidato(s) inéditos de um total de {len(raw_coaches)} nomes na base.")
+        print(f"[IA COACHES] Analisando {len(unmapped_coaches)} candidato(s) inéditos de um total de {len(nomes_para_resolver)} nomes na base.")
 
         if not unmapped_coaches:
             return SugerirAliasesLLMResponse(
@@ -725,9 +785,9 @@ def rejeitar_alias_pendente(body: RejeitarAliasPendenteRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao rejeitar alias pendente: {str(e)}")
 
 
-
 @router.post("/executar", response_model=ExecutarResponse)
 def executar_contabilidade():
+    desafios_result = _sync_desafios_isolado()
     try:
         rows = google_sheets_client.fetch_records()
         if not rows:
@@ -736,6 +796,7 @@ def executar_contabilidade():
                 pontos_por_clan={}, pontos_grupo_por_clan={},
                 pendentes_por_clan={}, pontos_por_coach={}, pendentes_por_coach={},
                 totais_atualizados={},
+                desafios=desafios_result,
                 mensagem="Nenhum dado encontrado na planilha de registros.",
             )
 
@@ -833,6 +894,12 @@ def executar_contabilidade():
         if not partes:
             partes.append("Nenhum novo registro encontrado")
 
+        if desafios_result.status == "success" and desafios_result.tokens_versioned > 0:
+            try:
+                _refresh_desafio_coach_totals()
+            except Exception as e:  # noqa: BLE001 - isolamento: não derruba /executar
+                print(f"[AVISO] Falha ao recompor totais de desafio-coach: {e}")
+
         return ExecutarResponse(
             novos_registros=len(new_records),
             novos_pendentes=novos_pendentes,
@@ -843,9 +910,37 @@ def executar_contabilidade():
             pontos_por_coach=all_coach_points,
             pendentes_por_coach=pendentes_por_coach,
             totais_atualizados=totais_atualizados,
+            desafios=desafios_result,
             mensagem=". ".join(partes) + ".",
         )
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/confirmar-desafios", response_model=DesafioSyncResult)
+def confirmar_desafios(body: ConfirmarDesafiosRequest):
+    """Confirma e aplica um plano de sincronização de desafios pendente.
+
+    Nunca aceita um plano ou deltas vindos do cliente: o cliente só informa o
+    `snapshot_hash` que lhe foi mostrado na prévia (via `desafios.snapshot_hash`
+    de `/executar`, quando `status == "awaiting_confirmation"`) e se aceita a
+    remoção em massa. O plano de fato é sempre recalculado aqui a partir da
+    planilha e do estado persistido atuais — se algum dos dois mudou desde a
+    prévia, `apply_reconciliation` recusa a aplicação (o hash não bate mais)
+    e uma nova prévia precisa ser solicitada.
+    """
+    try:
+        result = desafio_sync_service.sync_desafios(
+            confirm_snapshot_hash=body.snapshot_hash,
+            confirm_mass_removal=body.confirmar_remocao_em_massa,
+        )
+        if result.status == "success" and result.tokens_versioned > 0:
+            try:
+                _refresh_desafio_coach_totals()
+            except Exception as e:  # noqa: BLE001
+                print(f"[AVISO] Falha ao recompor totais de desafio-coach: {e}")
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -923,7 +1018,6 @@ def reprocessar_contabilidade():
                 all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
         desafio_totals_clan = supabase_client.get_tipo_clan_totals("desafios")
-        desafio_totals_coach = supabase_client.get_tipo_coach_totals("desafios")
 
         totais_finais_clan: dict[str, int] = {}
         all_clans_final = set(all_points.keys()) | set(desafio_totals_clan.keys())
@@ -936,9 +1030,9 @@ def reprocessar_contabilidade():
                 total_pro_bono=pro_bono_clan_pts.get(clan, 0),
             )
 
+        desafio_totals_coach = supabase_client.get_tipo_coach_totals("desafios")
         totais_finais_coach: dict[str, int] = {}
-        all_coaches_final = set(all_coach_points.keys()) | set(desafio_totals_coach.keys())
-        for coach in all_coaches_final:
+        for coach in set(all_coach_points.keys()) | set(desafio_totals_coach.keys()):
             total = all_coach_points.get(coach, 0) + desafio_totals_coach.get(coach, 0)
             totais_finais_coach[coach] = total
             supabase_client.upsert_coach_total(
@@ -1127,6 +1221,8 @@ def importar_inicial():
         )
         pontos_por_coach = coach_identity.aggregate_by_canonical(raw_pontos_por_coach, coach_alias_map)
 
+        desafio_coach_totals = supabase_client.get_tipo_coach_totals("desafios")
+
         # Pontos Pro-bono para coaches (todas as datas, sem restrição)
         pb_data_for_coach = pb_rows_seed[1:] if pb_rows_seed else []
         pb_records_for_coach = [
@@ -1141,11 +1237,17 @@ def importar_inicial():
         )
 
         carry_over_por_coach: dict[str, int] = {}
-        all_coaches = set(pontos_por_coach.keys()) | set(coach_group_people.keys()) | set(pro_bono_coach_pts_seed.keys())
+        all_coaches = (
+            set(pontos_por_coach.keys())
+            | set(coach_group_people.keys())
+            | set(pro_bono_coach_pts_seed.keys())
+            | set(desafio_coach_totals.keys())
+        )
         for coach in all_coaches:
             ci_pts = pontos_por_coach.get(coach, 0)
             pb_pts = pro_bono_coach_pts_seed.get(coach, 0)
-            total = ci_pts + pb_pts
+            desafio_pts = desafio_coach_totals.get(coach, 0)
+            total = ci_pts + pb_pts + desafio_pts
             pessoas = coach_group_people.get(coach, 0)
             carry_over = pessoas % config.BATCH_SIZE_GROUP if coach in coaches_com_lote else 0
             carry_over_por_coach[coach] = carry_over
@@ -1349,7 +1451,6 @@ async def historico(
         clan_totals = supabase_client.get_period_clan_totals(inicio_date, fim_date)
         desafio_totals = supabase_client.get_period_desafio_totals(inicio_date, fim_date)
         coach_totals = supabase_client.get_period_coach_totals(inicio_date, fim_date)
-        desafio_coach_totals = supabase_client.get_period_desafio_coach_totals(inicio_date, fim_date)
 
         # Merge clan points + desafio points
         all_clans = set(clan_totals.keys()) | set(desafio_totals.keys())
@@ -1357,11 +1458,14 @@ async def historico(
         for clan in all_clans:
             merged_clans[clan] = clan_totals.get(clan, 0) + desafio_totals.get(clan, 0)
 
-        # Merge coach points + desafio points
-        all_coaches = set(coach_totals.keys()) | set(desafio_coach_totals.keys())
-        merged_coaches = {}
-        for coach in all_coaches:
-            merged_coaches[coach] = coach_totals.get(coach, 0) + desafio_coach_totals.get(coach, 0)
+        coach_desafio_totals = supabase_client.get_period_desafio_coach_totals(
+            inicio_date, fim_date
+        )
+        all_coaches = set(coach_totals.keys()) | set(coach_desafio_totals.keys())
+        merged_coaches = {
+            coach: coach_totals.get(coach, 0) + coach_desafio_totals.get(coach, 0)
+            for coach in all_coaches
+        }
 
         return HistoricoResponse(clans=merged_clans, coaches=merged_coaches)
     except HTTPException:

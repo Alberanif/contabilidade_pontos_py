@@ -1176,6 +1176,8 @@ def importar_inicial():
         )
         pontos_por_coach = coach_identity.aggregate_by_canonical(raw_pontos_por_coach, coach_alias_map)
 
+        desafio_coach_totals = supabase_client.get_tipo_coach_totals("desafios")
+
         # Pontos Pro-bono para coaches (todas as datas, sem restrição)
         pb_data_for_coach = pb_rows_seed[1:] if pb_rows_seed else []
         pb_records_for_coach = [
@@ -1190,11 +1192,17 @@ def importar_inicial():
         )
 
         carry_over_por_coach: dict[str, int] = {}
-        all_coaches = set(pontos_por_coach.keys()) | set(coach_group_people.keys()) | set(pro_bono_coach_pts_seed.keys())
+        all_coaches = (
+            set(pontos_por_coach.keys())
+            | set(coach_group_people.keys())
+            | set(pro_bono_coach_pts_seed.keys())
+            | set(desafio_coach_totals.keys())
+        )
         for coach in all_coaches:
             ci_pts = pontos_por_coach.get(coach, 0)
             pb_pts = pro_bono_coach_pts_seed.get(coach, 0)
-            total = ci_pts + pb_pts
+            desafio_pts = desafio_coach_totals.get(coach, 0)
+            total = ci_pts + pb_pts + desafio_pts
             pessoas = coach_group_people.get(coach, 0)
             carry_over = pessoas % config.BATCH_SIZE_GROUP if coach in coaches_com_lote else 0
             carry_over_por_coach[coach] = carry_over

@@ -30,6 +30,7 @@ def test_historico_com_travar_inicio_apenas_data_inicio():
         # Verifica se o backend chamou as funções com fim = None
         mock_clan.assert_called_once_with(date(2026, 5, 1), None)
         mock_coach.assert_called_once_with(date(2026, 5, 1), None)
+        mock_desafio_coach.assert_called_once_with(date(2026, 5, 1), None)
 
 def test_totais_por_tipo_com_travar_inicio():
     inicio = "2026-05-01"

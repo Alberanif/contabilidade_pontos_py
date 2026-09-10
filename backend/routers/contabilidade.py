@@ -1413,9 +1413,14 @@ async def historico(
         for clan in all_clans:
             merged_clans[clan] = clan_totals.get(clan, 0) + desafio_totals.get(clan, 0)
 
-        # Pontos de coach: nenhuma fonte de desafio contribui (Global Constraint —
-        # ver issue #17). merged_coaches é apenas os totais pagante/pro-bono do coach.
-        merged_coaches = dict(coach_totals)
+        coach_desafio_totals = supabase_client.get_period_desafio_coach_totals(
+            inicio_date, fim_date
+        )
+        all_coaches = set(coach_totals.keys()) | set(coach_desafio_totals.keys())
+        merged_coaches = {
+            coach: coach_totals.get(coach, 0) + coach_desafio_totals.get(coach, 0)
+            for coach in all_coaches
+        }
 
         return HistoricoResponse(clans=merged_clans, coaches=merged_coaches)
     except HTTPException:

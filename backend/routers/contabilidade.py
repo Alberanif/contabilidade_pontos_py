@@ -472,11 +472,29 @@ def reprocessar_coaches():
 
         all_regs = supabase_client.list_all_registros()
         raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
+        # Desafios não pontuam coaches nesta fase (PRD 2026-08-19 §6/RF-14) —
+        # nenhum nome bruto de coach vem da fonte de desafios.
+        raw_coaches |= {t["coach"] for t in supabase_client.list_coach_totals() if t.get("coach")}
+
+        # Mapeamento implícito por normalize_key (resolve maiúsculas/minúsculas/acentos idênticos)
+        # Prefere nome formatado com maiúsculas/minúsculas sobre ALL CAPS
+        by_norm_key: dict[str, str] = {}
+        for c in sorted(list(set(alias_map.values()) | raw_coaches)):
+            nk = coach_identity.normalize_key(c)
+            if nk not in by_norm_key:
+                by_norm_key[nk] = c
+            elif by_norm_key[nk].isupper() and not c.isupper():
+                by_norm_key[nk] = c
 
         registros_atualizados = 0
         coaches_afetados: set[str] = set()
         for raw_coach in raw_coaches:
             canonical = coach_identity.resolve_coach(raw_coach, alias_map)
+            if canonical == raw_coach:
+                nk = coach_identity.normalize_key(raw_coach)
+                if nk in by_norm_key and by_norm_key[nk] != raw_coach:
+                    canonical = by_norm_key[nk]
+
             if canonical != raw_coach:
                 registros_atualizados += supabase_client.update_registros_coach(raw_coach, canonical)
                 coaches_afetados.add(canonical)
@@ -551,6 +569,182 @@ def _sync_desafios_isolado() -> DesafioSyncResult:
         return desafio_sync_service.sync_desafios()
     except Exception as e:  # noqa: BLE001 - isolamento final da fonte "desafios"
         return DesafioSyncResult(status="failed", mensagem=str(e))
+
+
+class AprovarAliasPendenteRequest(BaseModel):
+    id_pendente: int
+    coach_canonico_override: str | None = None
+
+
+class RejeitarAliasPendenteRequest(BaseModel):
+    id_pendente: int
+
+
+class SugerirAliasesLLMResponse(BaseModel):
+    total_analisados: int
+    auto_aprovados: int
+    enviados_para_fila: int
+    sem_correspondencia: int
+    mensagem: str
+
+
+@router.post("/sugerir-aliases-llm", response_model=SugerirAliasesLLMResponse)
+def sugerir_aliases_llm():
+    """Varre nomes brutos de coaches na base, avalia via RapidFuzz + Groq LLM
+    e auto-aprova (se confianca >= 95%) ou adiciona à fila de pendentes (se 70-94%)."""
+    try:
+        import coach_llm_service
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        alias_map = supabase_client.get_coach_alias_map()
+        alias_keys_norm = {coach_identity.normalize_key(k) for k in alias_map.keys()}
+
+        all_regs = supabase_client.list_all_registros()
+        raw_coaches = {r["coach"] for r in all_regs if r.get("coach")}
+        totais = supabase_client.list_coach_totals()
+        if totais:
+            raw_coaches |= {t["coach"] for t in totais if t.get("coach")}
+
+        canonical_list = sorted(list(set(alias_map.values()) | raw_coaches))
+
+        # Seleciona APENAS nomes brutos que realmente precisam de resolução:
+        # 1. Não estão no alias_map como chave
+        # 2. Não possuem correspondência de chave no alias_map
+        unmapped_coaches = []
+        for raw in raw_coaches:
+            if raw in alias_map:
+                continue
+            if coach_identity.normalize_key(raw) in alias_keys_norm:
+                continue
+            unmapped_coaches.append(raw)
+
+
+        print(f"[IA COACHES] Analisando {len(unmapped_coaches)} candidato(s) inéditos de um total de {len(raw_coaches)} nomes na base.")
+
+        if not unmapped_coaches:
+            return SugerirAliasesLLMResponse(
+                total_analisados=0,
+                auto_aprovados=0,
+                enviados_para_fila=0,
+                sem_correspondencia=0,
+                mensagem="Todos os nomes de coaches na base já foram resolvidos ou normalizados!",
+            )
+
+        total_analisados = len(unmapped_coaches)
+        auto_aprovados = 0
+        enviados_para_fila = 0
+        sem_correspondencia = 0
+
+        # Executa a avaliação em paralelo para performance ultra rápida
+        def _eval_one(raw_name: str):
+            raw_key = coach_identity.normalize_key(raw_name)
+            targets = [c for c in canonical_list if coach_identity.normalize_key(c) != raw_key]
+            if not targets:
+                return raw_name, {"action": "no_match", "coach_canonico": raw_name, "confianca": 0.0, "origem": "none"}
+            return raw_name, coach_llm_service.evaluate_coach_identity(raw_name, targets)
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_map = {executor.submit(_eval_one, raw_name): raw_name for raw_name in unmapped_coaches}
+            for future in as_completed(future_map):
+                raw_name, res = future.result()
+                action = res["action"]
+                print(f"[IA COACHES] Resultado para '{raw_name}': {res}")
+
+                if action == "auto_approve":
+                    supabase_client.insert_coach_alias(raw_name, res["coach_canonico"])
+                    supabase_client.upsert_pending_coach_alias(
+                        alias_raw=raw_name,
+                        coach_sugerido=res["coach_canonico"],
+                        confianca=res["confianca"],
+                        origem=res["origem"],
+                        status="aprovado",
+                    )
+                    auto_aprovados += 1
+                elif action == "pending_queue":
+                    supabase_client.upsert_pending_coach_alias(
+                        alias_raw=raw_name,
+                        coach_sugerido=res["coach_canonico"],
+                        confianca=res["confianca"],
+                        origem=res["origem"],
+                        status="pendente",
+                    )
+                    enviados_para_fila += 1
+                else:
+                    sem_correspondencia += 1
+
+        if auto_aprovados > 0:
+            reprocessar_coaches()
+
+        return SugerirAliasesLLMResponse(
+            total_analisados=total_analisados,
+            auto_aprovados=auto_aprovados,
+            enviados_para_fila=enviados_para_fila,
+            sem_correspondencia=sem_correspondencia,
+            mensagem=f"Análise concluída. {total_analisados} analisados ({auto_aprovados} auto-aprovados, {enviados_para_fila} na fila de pendentes).",
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao executar sugestões LLM: {str(e)}")
+
+
+@router.get("/aliases-pendentes")
+def get_aliases_pendentes(status: str = "pendente"):
+    """Retorna a lista de sugestões de aliases pendentes para revisão no Dashboard."""
+    try:
+        return supabase_client.get_pending_coach_aliases(status=status)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao listar aliases pendentes: {str(e)}")
+
+
+@router.post("/aprovar-alias-pendente")
+def aprovar_alias_pendente(body: AprovarAliasPendenteRequest):
+    """Aprova uma sugestão de alias pendente e dispara automaticamente o recálculo dos totais."""
+    try:
+        pendente = supabase_client.get_pending_coach_alias_by_id(body.id_pendente)
+        if not pendente:
+            raise HTTPException(status_code=404, detail="Sugestão pendente não encontrada.")
+
+        coach_canonico = body.coach_canonico_override or pendente["coach_sugerido"]
+        alias_raw = pendente["alias_raw"]
+
+        # Insere na tabela oficial de aliases
+        supabase_client.insert_coach_alias(alias_raw, coach_canonico)
+
+        # Atualiza status na tabela de pendentes
+        supabase_client.update_pending_coach_alias_status(body.id_pendente, status="aprovado", coach_sugerido=coach_canonico)
+
+        # Dispara recálculo automático de totais
+        reprocessamento = reprocessar_coaches()
+
+        return {
+            "status": "sucesso",
+            "mensagem": f"Alias '{alias_raw}' -> '{coach_canonico}' aprovado com sucesso.",
+            "reprocessamento": reprocessamento,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao aprovar alias pendente: {str(e)}")
+
+
+@router.post("/rejeitar-alias-pendente")
+def rejeitar_alias_pendente(body: RejeitarAliasPendenteRequest):
+    """Marca a sugestão de alias pendente como rejeitada."""
+    try:
+        pendente = supabase_client.get_pending_coach_alias_by_id(body.id_pendente)
+        if not pendente:
+            raise HTTPException(status_code=404, detail="Sugestão pendente não encontrada.")
+
+        supabase_client.update_pending_coach_alias_status(body.id_pendente, status="rejeitado")
+
+        return {
+            "status": "sucesso",
+            "mensagem": f"Sugestão de alias '{pendente['alias_raw']}' rejeitada.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao rejeitar alias pendente: {str(e)}")
 
 
 @router.post("/executar", response_model=ExecutarResponse)
@@ -1113,13 +1307,11 @@ def debug_date_sample():
 
 @router.post("/atualizar-planilha", response_model=AtualizarPlanilhaResponse)
 def atualizar_planilha():
-    """Sincroniza os totais de pontos dos clãs do banco para a planilha Google Sheets."""
+    """Endpoint mantido para compatibilidade — o sistema opera em modo estritamente de leitura do Google Sheets."""
     try:
-        totais = supabase_client.get_clan_totals()
-        resultado = google_sheets_client.sync_clan_totals_to_sheet(totais)
         return AtualizarPlanilhaResponse(
-            totais_atualizados=resultado,
-            mensagem=f"{len(resultado)} clã(s) atualizados na planilha.",
+            totais_atualizados={},
+            mensagem="Sincronização com o Google Sheets desativada (sistema em modo estritamente de leitura).",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1174,25 +1366,26 @@ def preencher_datas():
 
 
 @router.get("/historico", response_model=HistoricoResponse)
-async def historico(inicio: str = Query(..., description="Data inicial no formato YYYY-MM-DD"), fim: str = Query(..., description="Data final no formato YYYY-MM-DD")):
+async def historico(
+    inicio: str = Query(..., description="Data inicial no formato YYYY-MM-DD"),
+    fim: str | None = Query(None, description="Data final no formato YYYY-MM-DD (opcional)")
+):
     """
-    Get ranking for a date period [inicio, fim].
-    Both dates required, ISO format (YYYY-MM-DD).
+    Get ranking for a date period starting from `inicio` (and optionally ending at `fim`).
+    ISO format (YYYY-MM-DD).
     Returns summed points within period for clans and coaches.
     """
     try:
-        # Validate both params present
-        if not inicio or not fim:
-            raise HTTPException(status_code=400, detail="inicio and fim are required")
+        if not inicio:
+            raise HTTPException(status_code=400, detail="inicio is required")
 
         try:
             inicio_date = datetime.fromisoformat(inicio).date()
-            fim_date = datetime.fromisoformat(fim).date()
+            fim_date = datetime.fromisoformat(fim).date() if fim else None
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
-        # Validate inicio <= fim
-        if inicio_date > fim_date:
+        if inicio_date and fim_date and inicio_date > fim_date:
             raise HTTPException(status_code=400, detail="inicio must be <= fim")
 
         # Get period totals
@@ -1232,15 +1425,16 @@ async def totais_por_tipo(
 
         inicio_date: date | None = None
         fim_date: date | None = None
-        if inicio and fim:
+        if inicio:
             try:
                 inicio_date = datetime.fromisoformat(inicio).date()
-                fim_date = datetime.fromisoformat(fim).date()
+                if fim:
+                    fim_date = datetime.fromisoformat(fim).date()
             except ValueError:
                 raise HTTPException(
                     status_code=400, detail="Invalid date format. Use YYYY-MM-DD"
                 )
-            if inicio_date > fim_date:
+            if inicio_date and fim_date and inicio_date > fim_date:
                 raise HTTPException(
                     status_code=400, detail="inicio must be <= fim"
                 )

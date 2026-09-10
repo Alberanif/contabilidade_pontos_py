@@ -58,6 +58,7 @@ class TestReprocessarCoachesMergeERecalcula:
 
         with patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.list_all_registros", return_value=regs), \
+             patch("supabase_client.list_coach_totals", return_value=[]), \
              patch("supabase_client.update_registros_coach") as mock_update, \
              patch("supabase_client.delete_coach_total") as mock_delete, \
              patch("supabase_client.upsert_coach_total") as mock_upsert:
@@ -74,6 +75,7 @@ class TestReprocessarCoachesMergeERecalcula:
         with patch("supabase_client.get_coach_alias_map",
                     return_value={"A": "B", "B": "C"}), \
              patch("supabase_client.list_all_registros", return_value=[]), \
+             patch("supabase_client.list_coach_totals", return_value=[]), \
              patch("supabase_client.update_registros_coach"), \
              patch("supabase_client.delete_coach_total"), \
              patch("supabase_client.upsert_coach_total"):
@@ -91,6 +93,7 @@ class TestReprocessarCoachesMergeERecalcula:
         with patch("supabase_client.get_coach_alias_map",
                     return_value={"Vini Marini": "Vinicius Marini"}), \
              patch("supabase_client.list_all_registros", return_value=[]), \
+             patch("supabase_client.list_coach_totals", return_value=[]), \
              patch("supabase_client.update_registros_coach") as mock_update, \
              patch("supabase_client.delete_coach_total") as mock_delete, \
              patch("supabase_client.upsert_coach_total") as mock_upsert:

@@ -18,6 +18,7 @@ TABLE_COACH_ALIASES_PENDENTES = "pontos_ultimate_coach_aliases_pendentes"
 TABLE_DESAFIO_SYNC_RUNS = "desafio_sync_runs"
 TABLE_DESAFIO_SUBMISSIONS_CURRENT = "desafio_submissions_current"
 TABLE_DESAFIO_SUBMISSION_VERSIONS = "desafio_submission_versions"
+TABLE_COACH_CLAS = "pontos_ultimate_coach_clas"
 
 
 def _get_client() -> Client:
@@ -379,6 +380,40 @@ def get_coach_alias_map() -> dict[str, str]:
     client = _get_client()
     result = client.table(TABLE_COACH_ALIASES).select("alias, coach_canonico").execute()
     return {row["alias"]: row["coach_canonico"] for row in result.data}
+
+
+# --- Coach x Clã (vínculo) ---
+
+
+def list_coach_clas(clan: str | None = None) -> list[dict]:
+    """Lista os vínculos coach -> clã, com filtro opcional por clã."""
+    client = _get_client()
+    query = client.table(TABLE_COACH_CLAS).select("*")
+    if clan:
+        query = query.eq("clan", clan)
+    result = query.execute()
+    return result.data
+
+
+def upsert_coach_cla(coach_canonico: str, clan: str, categoria: str) -> dict:
+    """Cria ou atualiza o vínculo de um coach a um clã, por `coach_canonico`."""
+    client = _get_client()
+    payload = {
+        "coach_canonico": coach_canonico,
+        "clan": clan,
+        "categoria": categoria,
+    }
+    result = client.table(TABLE_COACH_CLAS).upsert(
+        payload, on_conflict="coach_canonico"
+    ).execute()
+    return result.data[0] if result.data else {}
+
+
+def delete_coach_cla(coach_canonico: str) -> None:
+    """Remove o vínculo de um coach a um clã. Idempotente: não falha se o
+    coach não tiver vínculo cadastrado."""
+    client = _get_client()
+    client.table(TABLE_COACH_CLAS).delete().eq("coach_canonico", coach_canonico).execute()
 
 
 # --- Sincronização de desafios via Google Sheets (somente leitura) ---

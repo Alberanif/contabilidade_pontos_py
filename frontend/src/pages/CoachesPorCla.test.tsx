@@ -2,13 +2,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CoachesPorCla from "./CoachesPorCla";
-import { fetchCoachClas, type CoachCla } from "../api/client";
+import {
+  fetchCoachClas,
+  createCoachCla,
+  updateCoachCla,
+  deleteCoachCla,
+  type CoachCla,
+} from "../api/client";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
     fetchCoachClas: vi.fn(),
+    createCoachCla: vi.fn(),
+    updateCoachCla: vi.fn(),
+    deleteCoachCla: vi.fn(),
   };
 });
 
@@ -106,16 +115,167 @@ describe("CoachesPorCla (listagem somente leitura)", () => {
     expect(screen.queryByText(/pontos/i)).not.toBeInTheDocument();
   });
 
-  it("shows no add/edit/move/remove affordances (read-only in this task)", async () => {
-    vi.mocked(fetchCoachClas).mockResolvedValue([
-      buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Ouro" }),
-    ]);
+});
 
+// CRUD pela UI (issue #7 / Task 7): adicionar, mover de clã, editar categoria
+// e remover um coach, tudo pelo formulário/ações da própria página, sem SQL
+// ou reimportação de CSV. Substitui a antiga suíte "read-only" desta página
+// (issue #6), que agora não se aplica mais.
+describe("CoachesPorCla (CRUD - issue #7)", () => {
+  beforeEach(() => {
+    vi.mocked(fetchCoachClas).mockReset();
+    vi.mocked(createCoachCla).mockReset();
+    vi.mocked(updateCoachCla).mockReset();
+    vi.mocked(deleteCoachCla).mockReset();
+  });
+
+  it("adds a new coach through the form, refreshing the list afterwards", async () => {
+    vi.mocked(fetchCoachClas)
+      .mockResolvedValueOnce([
+        buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach" }),
+      ])
+      .mockResolvedValueOnce([
+        buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach" }),
+        buildCoachCla({ coach_canonico: "Novo Coach", clan: "CLÃ 3", categoria: "Coach Pro" }),
+      ]);
+    vi.mocked(createCoachCla).mockResolvedValue(
+      buildCoachCla({ coach_canonico: "Novo Coach", clan: "CLÃ 3", categoria: "Coach Pro" })
+    );
+
+    const user = userEvent.setup();
     render(<CoachesPorCla />);
     await screen.findByText("Ana Albertim");
 
-    for (const name of [/adicionar/i, /^editar$/i, /^excluir$/i, /^remover$/i, /^mover$/i, /^salvar$/i]) {
-      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
-    }
+    await user.click(screen.getByRole("button", { name: /adicionar coach/i }));
+    await user.type(screen.getByLabelText(/nome do coach/i), "Novo Coach");
+    await user.selectOptions(screen.getByLabelText(/^clã$/i), "CLÃ 3");
+    await user.selectOptions(screen.getByLabelText(/^categoria$/i), "Coach Pro");
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+
+    await waitFor(() =>
+      expect(createCoachCla).toHaveBeenCalledWith({
+        coach: "Novo Coach",
+        clan: "CLÃ 3",
+        categoria: "Coach Pro",
+      })
+    );
+    expect(await screen.findByText("Novo Coach")).toBeInTheDocument();
+    expect(fetchCoachClas).toHaveBeenCalledTimes(2);
+    // O formulário fecha após sucesso.
+    expect(screen.queryByLabelText(/nome do coach/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a clear message instead of a generic error when adding conflicts with 409", async () => {
+    vi.mocked(fetchCoachClas).mockResolvedValue([
+      buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach" }),
+    ]);
+    const conflictError = new Error(
+      "Coach 'Ana Albertim' já pertence ao clã 'CLÃ 1'. Use PUT /api/coach-clas/{coach_canonico} para mover de clã."
+    ) as Error & { status?: number };
+    conflictError.status = 409;
+    vi.mocked(createCoachCla).mockRejectedValue(conflictError);
+
+    const user = userEvent.setup();
+    render(<CoachesPorCla />);
+    await screen.findByText("Ana Albertim");
+
+    await user.click(screen.getByRole("button", { name: /adicionar coach/i }));
+    await user.type(screen.getByLabelText(/nome do coach/i), "Ana Albertim");
+    await user.selectOptions(screen.getByLabelText(/^clã$/i), "CLÃ 2");
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+
+    expect(await screen.findByText(/este coach já está no clã 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/use "editar"/i)).toBeInTheDocument();
+    // O formulário permanece aberto (não fecha em erro) e a lista não é
+    // revalidada, já que a operação falhou.
+    expect(screen.getByLabelText(/nome do coach/i)).toBeInTheDocument();
+    expect(fetchCoachClas).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves a coach to a different clã via the edit form (updateCoachCla)", async () => {
+    vi.mocked(fetchCoachClas)
+      .mockResolvedValueOnce([
+        buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach" }),
+      ])
+      .mockResolvedValueOnce([
+        buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 4", categoria: "Coach" }),
+      ]);
+    vi.mocked(updateCoachCla).mockResolvedValue(
+      buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 4", categoria: "Coach" })
+    );
+
+    const user = userEvent.setup();
+    render(<CoachesPorCla />);
+    await screen.findByText("Ana Albertim");
+
+    const row = screen.getByTestId("coach-row-Ana Albertim");
+    await user.click(within(row).getByRole("button", { name: /^editar$/i }));
+
+    // O nome do coach não é editável em modo edição (só clã/categoria mudam).
+    expect(screen.getByLabelText(/nome do coach/i)).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText(/^clã$/i), "CLÃ 4");
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+
+    await waitFor(() =>
+      expect(updateCoachCla).toHaveBeenCalledWith("Ana Albertim", { clan: "CLÃ 4", categoria: "Coach" })
+    );
+    expect(await screen.findByTestId("clan-section-CLÃ 4")).toBeInTheDocument();
+    expect(screen.queryByTestId("clan-section-CLÃ 1")).not.toBeInTheDocument();
+  });
+
+  it("edits a coach's categoria via the edit form (updateCoachCla)", async () => {
+    vi.mocked(fetchCoachClas)
+      .mockResolvedValueOnce([
+        buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach" }),
+      ])
+      .mockResolvedValueOnce([
+        buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach Hero" }),
+      ]);
+    vi.mocked(updateCoachCla).mockResolvedValue(
+      buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach Hero" })
+    );
+
+    const user = userEvent.setup();
+    render(<CoachesPorCla />);
+    await screen.findByText("Ana Albertim");
+
+    const row = screen.getByTestId("coach-row-Ana Albertim");
+    await user.click(within(row).getByRole("button", { name: /^editar$/i }));
+    await user.selectOptions(screen.getByLabelText(/^categoria$/i), "Coach Hero");
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+
+    await waitFor(() =>
+      expect(updateCoachCla).toHaveBeenCalledWith("Ana Albertim", { clan: "CLÃ 1", categoria: "Coach Hero" })
+    );
+    expect(await screen.findByText("Coach Hero")).toBeInTheDocument();
+  });
+
+  it("requires confirmation before removing a coach; cancel keeps it, confirm removes and refreshes", async () => {
+    vi.mocked(fetchCoachClas)
+      .mockResolvedValueOnce([
+        buildCoachCla({ coach_canonico: "Ana Albertim", clan: "CLÃ 1", categoria: "Coach" }),
+      ])
+      .mockResolvedValueOnce([]);
+    vi.mocked(deleteCoachCla).mockResolvedValue(undefined);
+
+    const user = userEvent.setup();
+    render(<CoachesPorCla />);
+    await screen.findByText("Ana Albertim");
+
+    const row = screen.getByTestId("coach-row-Ana Albertim");
+    await user.click(within(row).getByRole("button", { name: /^remover$/i }));
+
+    // Cancelar: coach permanece, deleteCoachCla não é chamado.
+    await user.click(within(row).getByRole("button", { name: /^cancelar$/i }));
+    expect(deleteCoachCla).not.toHaveBeenCalled();
+    expect(screen.getByText("Ana Albertim")).toBeInTheDocument();
+
+    // Confirmar: agora remove de fato.
+    await user.click(within(row).getByRole("button", { name: /^remover$/i }));
+    await user.click(within(row).getByRole("button", { name: /confirmar remoção/i }));
+
+    await waitFor(() => expect(deleteCoachCla).toHaveBeenCalledWith("Ana Albertim"));
+    await waitFor(() => expect(screen.queryByText("Ana Albertim")).not.toBeInTheDocument());
+    expect(fetchCoachClas).toHaveBeenCalledTimes(2);
   });
 });

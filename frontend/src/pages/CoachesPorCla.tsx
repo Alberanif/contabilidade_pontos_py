@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchCoachClas, type CoachCla } from "../api/client";
+import {
+  fetchCoachClas,
+  createCoachCla,
+  updateCoachCla,
+  deleteCoachCla,
+  type CoachCla,
+} from "../api/client";
+import CoachClaForm, { type CoachClaFormValues } from "../components/CoachClaForm";
 
-// Página "Coaches por Clã" (issue #6, PRD #28) — listagem somente leitura da
-// atribuição fixa de cada coach a um único clã. Não existe aqui nenhuma ação
-// de adicionar/editar/mover/remover coach de clã (fica para a issue #7) nem
-// exibição de pontos/totais (fora de escopo desta tela).
+// Página "Coaches por Clã" (issue #6, PRD #28), com CRUD adicionado na
+// issue #7: adicionar, mover de clã, editar categoria e remover um coach —
+// tudo pela UI, sem precisar de SQL ou reimportação de CSV. Continua sem
+// nenhuma exibição de pontos/totais (fora de escopo desta tela).
 
 function normalizarBusca(texto: string): string {
   return texto.trim().toLocaleLowerCase("pt-BR");
@@ -27,11 +34,24 @@ function agruparPorClan(coaches: CoachCla[]): Map<string, CoachCla[]> {
   return grupos;
 }
 
+// Extrai o clã atual da mensagem 409 do backend
+// ("Coach 'X' já pertence ao clã 'CLÃ 1'. Use PUT ... para mover de clã.")
+// para montar uma mensagem amigável, sem expor detalhes técnicos de rota
+// HTTP ao usuário final.
+function extrairClanDoErro409(mensagem: string): string | null {
+  const match = mensagem.match(/clã '([^']+)'/i);
+  return match ? match[1] : null;
+}
+
+type FormState = { mode: "add" } | { mode: "edit"; coach: CoachCla };
+
 export default function CoachesPorCla() {
   const [coaches, setCoaches] = useState<CoachCla[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState("");
   const [busca, setBusca] = useState("");
+  const [formState, setFormState] = useState<FormState | null>(null);
+  const [confirmandoRemocao, setConfirmandoRemocao] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelado = false;
@@ -52,6 +72,55 @@ export default function CoachesPorCla() {
     };
   }, []);
 
+  // Revalida a lista a partir do servidor após qualquer operação de
+  // CRUD bem-sucedida, para refletir o estado atualizado sem exigir reload
+  // manual da página.
+  async function recarregarLista() {
+    try {
+      const data = await fetchCoachClas();
+      setCoaches(data);
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Erro ao carregar coaches por clã");
+    }
+  }
+
+  async function handleAdicionar(values: CoachClaFormValues) {
+    try {
+      await createCoachCla(values);
+    } catch (err) {
+      const e = err as Error & { status?: number };
+      if (e.status === 409) {
+        const clanAtual = extrairClanDoErro409(e.message) ?? "outro clã";
+        throw new Error(`Este coach já está no ${clanAtual}. Use "Editar" para movê-lo.`);
+      }
+      throw new Error(e.message || "Erro ao adicionar coach.");
+    }
+    setFormState(null);
+    await recarregarLista();
+  }
+
+  async function handleEditar(coachCanonico: string, values: CoachClaFormValues) {
+    try {
+      await updateCoachCla(coachCanonico, { clan: values.clan, categoria: values.categoria });
+    } catch (err) {
+      const e = err as Error;
+      throw new Error(e.message || "Erro ao atualizar coach.");
+    }
+    setFormState(null);
+    await recarregarLista();
+  }
+
+  async function handleRemover(coachCanonico: string) {
+    try {
+      await deleteCoachCla(coachCanonico);
+      setConfirmandoRemocao(null);
+      await recarregarLista();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Erro ao remover coach.");
+      setConfirmandoRemocao(null);
+    }
+  }
+
   const coachesFiltrados = useMemo(() => {
     const termo = normalizarBusca(busca);
     if (!termo) return coaches;
@@ -69,18 +138,26 @@ export default function CoachesPorCla() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <h2 className="text-2xl font-bold text-gray-800">Coaches por Clã</h2>
-        <div>
-          <label htmlFor="busca-coach" className="block text-xs font-medium text-gray-500 mb-1">
-            Buscar por nome
-          </label>
-          <input
-            id="busca-coach"
-            type="text"
-            value={busca}
-            onChange={(e) => setBusca(e.target.value)}
-            placeholder="Nome do coach"
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
+        <div className="flex items-end gap-4">
+          <div>
+            <label htmlFor="busca-coach" className="block text-xs font-medium text-gray-500 mb-1">
+              Buscar por nome
+            </label>
+            <input
+              id="busca-coach"
+              type="text"
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              placeholder="Nome do coach"
+              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <button
+            onClick={() => setFormState({ mode: "add" })}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-1.5 rounded-lg shadow-sm transition-colors"
+          >
+            + Adicionar coach
+          </button>
         </div>
       </div>
 
@@ -109,18 +186,83 @@ export default function CoachesPorCla() {
                   {coachesDoClan.map((c) => (
                     <li
                       key={c.coach_canonico}
-                      className="py-2 flex items-center justify-between gap-2"
+                      data-testid={`coach-row-${c.coach_canonico}`}
+                      className="py-2 flex items-center justify-between gap-2 flex-wrap"
                     >
-                      <span className="text-sm font-medium text-gray-800">{c.coach_canonico}</span>
-                      <span className="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700 whitespace-nowrap">
-                        {c.categoria}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-800">{c.coach_canonico}</span>
+                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700 whitespace-nowrap">
+                          {c.categoria}
+                        </span>
+                      </div>
+                      {confirmandoRemocao === c.coach_canonico ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-red-600">Remover este coach?</span>
+                          <button
+                            onClick={() => handleRemover(c.coach_canonico)}
+                            className="text-xs font-semibold text-white bg-red-600 hover:bg-red-700 px-2 py-1 rounded"
+                          >
+                            Confirmar remoção
+                          </button>
+                          <button
+                            onClick={() => setConfirmandoRemocao(null)}
+                            className="text-xs font-medium text-gray-600 hover:text-gray-800 px-2 py-1"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setFormState({ mode: "edit", coach: c })}
+                            className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => setConfirmandoRemocao(c.coach_canonico)}
+                            className="text-xs font-medium text-red-600 hover:text-red-800 px-2 py-1"
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {formState && (
+        <div
+          data-testid="coach-cla-form-overlay"
+          className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+        >
+          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-bold text-gray-800 mb-4">
+              {formState.mode === "add" ? "Adicionar coach" : `Editar ${formState.coach.coach_canonico}`}
+            </h3>
+            <CoachClaForm
+              initialValues={
+                formState.mode === "edit"
+                  ? {
+                      coach: formState.coach.coach_canonico,
+                      clan: formState.coach.clan,
+                      categoria: formState.coach.categoria,
+                    }
+                  : undefined
+              }
+              onSubmit={
+                formState.mode === "add"
+                  ? handleAdicionar
+                  : (values) => handleEditar(formState.coach.coach_canonico, values)
+              }
+              onCancel={() => setFormState(null)}
+            />
+          </div>
         </div>
       )}
     </div>

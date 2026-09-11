@@ -9,7 +9,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || `Erro ${res.status}`);
+    const err = new Error(error.detail || `Erro ${res.status}`) as Error & {
+      status?: number;
+    };
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -463,6 +467,51 @@ export function rejeitarAliasPendente(id_pendente: number): Promise<{ status: st
   return request("/api/contabilidade/rejeitar-alias-pendente", {
     method: "POST",
     body: JSON.stringify({ id_pendente }),
+  });
+}
+
+// --- Coaches por Clã ---
+//
+// Atribuição fixa de cada coach a um único clã (RF da PRD #28). Espelha o
+// Pydantic model de `backend/routers/coach_clas.py` — nomes/tipos devem
+// permanecer idênticos aos de lá. `createCoachCla` responde 409 quando o
+// coach já pertence a outro clã; o chamador distingue esse caso pela
+// propriedade `status` no erro lançado (ver `request()` acima).
+
+export interface CoachCla {
+  coach_canonico: string;
+  clan: string;
+  categoria: string;
+}
+
+export function fetchCoachClas(clan?: string): Promise<CoachCla[]> {
+  return request(`/api/coach-clas${clan ? `?clan=${encodeURIComponent(clan)}` : ""}`);
+}
+
+export function createCoachCla(payload: {
+  coach: string;
+  clan: string;
+  categoria: string;
+}): Promise<CoachCla> {
+  return request("/api/coach-clas", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateCoachCla(
+  coachCanonico: string,
+  payload: { clan?: string; categoria?: string }
+): Promise<CoachCla> {
+  return request(`/api/coach-clas/${encodeURIComponent(coachCanonico)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteCoachCla(coachCanonico: string): Promise<void> {
+  return request(`/api/coach-clas/${encodeURIComponent(coachCanonico)}`, {
+    method: "DELETE",
   });
 }
 

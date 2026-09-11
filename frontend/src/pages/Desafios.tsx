@@ -7,15 +7,20 @@ import {
   fetchVersoesDaSubmissao,
   fetchSincronizacoes,
   fetchSincronizacao,
+  getDesafioApuracao,
+  revisarSubmissao,
   type DesafioAuditoria,
   type DesafioAuditoriaDetalhe,
   type DesafioSubmissao,
   type DesafioSubmissaoVersao,
   type DesafioSincronizacao,
+  type DesafioApuracaoResponse,
 } from "../api/client";
 import DesafioFilters, { type DesafioFiltersValue } from "../components/DesafioFilters";
 import SubmissionDetail from "../components/SubmissionDetail";
 import SyncRunDetail from "../components/SyncRunDetail";
+import { DesafioPrazoEditor } from "../components/DesafioPrazoEditor";
+import { DesafioClanApuracaoTable } from "../components/DesafioClanApuracaoTable";
 
 // Tela de consulta e auditoria de Desafios (issue #21) — somente leitura,
 // contra a API de auditoria da Task 7 (backend/routers/desafio_auditoria.py).
@@ -137,6 +142,7 @@ export default function Desafios() {
   const [submissoes, setSubmissoes] = useState<DesafioSubmissao[]>([]);
   const [loadingSubmissoes, setLoadingSubmissoes] = useState(false);
   const [erroSubmissoes, setErroSubmissoes] = useState("");
+  const [paginaSubmissoes, setPaginaSubmissoes] = useState(1);
 
   const [submissaoAtual, setSubmissaoAtual] = useState<DesafioSubmissao | null>(null);
   const [loadingSubmissao, setLoadingSubmissao] = useState(false);
@@ -205,12 +211,53 @@ export default function Desafios() {
     };
   }, [desafioDetalheId]);
 
+  const [apuracao, setApuracao] = useState<DesafioApuracaoResponse | null>(null);
+  const [loadingApuracao, setLoadingApuracao] = useState(false);
+
+  const carregarApuracao = (id: number) => {
+    setLoadingApuracao(true);
+    getDesafioApuracao(id)
+      .then((data) => setApuracao(data))
+      .catch((e) => console.error("Erro ao carregar apuração", e))
+      .finally(() => setLoadingApuracao(false));
+  };
+
+  const carregarSubmissoes = (id: number) => {
+    setLoadingSubmissoes(true);
+    fetchSubmissoesDoDesafio(id, {
+      clan: filtros.clan || undefined,
+      status: filtros.status || undefined,
+      limit: SUBMISSOES_LIMIT,
+    })
+      .then((data) => setSubmissoes(data))
+      .catch((e) => setErroSubmissoes(e instanceof Error ? e.message : "Erro ao carregar submissões"))
+      .finally(() => setLoadingSubmissoes(false));
+  };
+
+  useEffect(() => {
+    if (desafioDetalheId == null) return;
+    carregarApuracao(desafioDetalheId);
+  }, [desafioDetalheId]);
+
+  const handleRevisarSubmissao = async (token: string, newStatus: "aprovado" | "reprovado") => {
+    try {
+      await revisarSubmissao(token, newStatus);
+      if (desafioDetalheId) {
+        carregarSubmissoes(desafioDetalheId);
+        carregarApuracao(desafioDetalheId);
+      }
+    } catch (err) {
+      alert(`Erro ao revisar submissão: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   useEffect(() => {
     if (desafioDetalheId == null) return;
     let cancelado = false;
     setLoadingSubmissoes(true);
     setErroSubmissoes("");
     setSubmissoes([]);
+    setPaginaSubmissoes(1);
     fetchSubmissoesDoDesafio(desafioDetalheId, {
       clan: filtros.clan || undefined,
       status: filtros.status || undefined,
@@ -228,9 +275,6 @@ export default function Desafios() {
     return () => {
       cancelado = true;
     };
-    // Deliberado: dataInicio/dataFim ficam de fora — não existe parâmetro de
-    // período no backend (ver contrato da Task 7), então o período é aplicado
-    // no cliente sobre a página já carregada, sem novas chamadas ao servidor.
   }, [desafioDetalheId, filtros.clan, filtros.status]);
 
   const submissaoToken = desafioView.name === "submissao" ? desafioView.token : null;
@@ -326,6 +370,7 @@ export default function Desafios() {
 
   const abrirDesafio = (id: number) => {
     setFiltros({ clan: "", status: "", dataInicio: "", dataFim: "" });
+    setPaginaSubmissoes(1);
     setDesafioView({ name: "detalhe", id });
   };
 
@@ -359,7 +404,7 @@ export default function Desafios() {
     }
   };
 
-  // --- Filtro de período (client-side, ver comentário no efeito de submissões) ---
+  const TAMANHO_PAGINA_SUBMISSOES = 10;
 
   const submissoesFiltradas = submissoes.filter((s) => {
     if (!filtros.dataInicio && !filtros.dataFim) return true;
@@ -369,6 +414,12 @@ export default function Desafios() {
     if (filtros.dataFim && dia > filtros.dataFim) return false;
     return true;
   });
+
+  const totalPaginasSubmissoes = Math.ceil(submissoesFiltradas.length / TAMANHO_PAGINA_SUBMISSOES) || 1;
+  const submissoesPaginadas = submissoesFiltradas.slice(
+    (paginaSubmissoes - 1) * TAMANHO_PAGINA_SUBMISSOES,
+    paginaSubmissoes * TAMANHO_PAGINA_SUBMISSOES
+  );
 
   // --- Elementos compartilhados ---
 
@@ -515,69 +566,26 @@ export default function Desafios() {
               <span className="text-sm text-gray-500">{formatPeriodo(desafioDetalhe)}</span>
             </div>
 
-            <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-2">Pontos por clã</h4>
-              {Object.keys(desafioDetalhe.pontos_por_clan).length === 0 ? (
-                <p className="text-gray-500 text-sm">Nenhum ponto contabilizado ainda.</p>
-              ) : (
-                <div
-                  className="bg-white rounded-xl border border-gray-200 overflow-hidden"
-                  data-testid="pontos-por-clan"
-                >
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
-                        <th className="py-2 px-4 font-medium">Clã</th>
-                        <th className="py-2 px-4 font-medium text-right">Pontos</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(desafioDetalhe.pontos_por_clan).map(([clan, pontos]) => (
-                        <tr key={clan} className="border-b border-gray-100">
-                          <td className="py-2 px-4 font-medium text-gray-700">{clan}</td>
-                          <td className="py-2 px-4 text-right font-bold text-indigo-600">
-                            {pontos.toLocaleString("pt-BR")}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            <DesafioPrazoEditor
+              desafioId={desafioDetalhe.id}
+              prazoAtual={desafioDetalhe.prazo_apuracao}
+              apuradoEm={desafioDetalhe.apurado_em}
+              onUpdate={() => {
+                fetchDesafioAuditoria(desafioDetalhe.id).then((d) => setDesafioDetalhe(d));
+                carregarApuracao(desafioDetalhe.id);
+              }}
+            />
 
-            <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-2">Pontos por coach</h4>
-              {Object.keys(desafioDetalhe.pontos_por_coach).length === 0 ? (
-                <p className="text-gray-500 text-sm">Nenhum ponto de coach contabilizado ainda.</p>
-              ) : (
-                <div
-                  className="bg-white rounded-xl border border-gray-200 overflow-hidden"
-                  data-testid="pontos-por-coach"
-                >
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
-                        <th className="py-2 px-4 font-medium">Coach</th>
-                        <th className="py-2 px-4 font-medium text-right">Pontos</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(desafioDetalhe.pontos_por_coach).map(([coach, pontos]) => (
-                        <tr key={coach} className="border-b border-gray-100">
-                          <td className="py-2 px-4 font-medium text-gray-700">{coach}</td>
-                          <td className="py-2 px-4 text-right font-bold text-indigo-600">
-                            {pontos.toLocaleString("pt-BR")}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            <DesafioClanApuracaoTable apuracao={apuracao} loading={loadingApuracao} />
 
-            <DesafioFilters value={filtros} onChange={setFiltros} statusOptions={SUBMISSION_STATUS_OPTIONS} />
+            <DesafioFilters
+              value={filtros}
+              onChange={(f) => {
+                setFiltros(f);
+                setPaginaSubmissoes(1);
+              }}
+              statusOptions={SUBMISSION_STATUS_OPTIONS}
+            />
 
             <div>
               <h4 className="text-sm font-semibold text-gray-700 mb-2">
@@ -602,41 +610,121 @@ export default function Desafios() {
               ) : submissoesFiltradas.length === 0 ? (
                 <p className="text-gray-500 text-sm">Nenhuma submissão encontrada para os filtros atuais.</p>
               ) : (
-                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
-                        <th className="py-2 px-4 font-medium">Token</th>
-                        <th className="py-2 px-4 font-medium">Clã</th>
-                        <th className="py-2 px-4 font-medium">Coach</th>
-                        <th className="py-2 px-4 font-medium">Status</th>
-                        <th className="py-2 px-4 font-medium text-right">Pontos</th>
-                        <th className="py-2 px-4 font-medium">Enviado em</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {submissoesFiltradas.map((s) => (
-                        <tr key={s.token} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-2 px-4">
-                            <button
-                              onClick={() => abrirSubmissao(s.token)}
-                              className="font-mono text-indigo-600 hover:underline text-left"
-                            >
-                              {s.token}
-                            </button>
-                          </td>
-                          <td className="py-2 px-4 text-gray-700">{s.clan ?? "—"}</td>
-                          <td className="py-2 px-4 text-gray-700">{s.coach ?? "—"}</td>
-                          <td className="py-2 px-4 text-gray-700">
-                            {SUBMISSION_STATUS_LABELS[s.status] ?? s.status}
-                          </td>
-                          <td className="py-2 px-4 text-right text-gray-700">{s.points}</td>
-                          <td className="py-2 px-4 text-gray-500">{formatDateTime(s.submitted_at)}</td>
+                <>
+                  <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+                          <th className="py-2 px-4 font-medium">Token</th>
+                          <th className="py-2 px-4 font-medium">Clã</th>
+                          <th className="py-2 px-4 font-medium">Coach</th>
+                          <th className="py-2 px-4 font-medium">Status Reconciliação</th>
+                          <th className="py-2 px-4 font-medium text-center">Revisão Manual</th>
+                          <th className="py-2 px-4 font-medium text-right">Pontos</th>
+                          <th className="py-2 px-4 font-medium">Enviado em</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {submissoesPaginadas.map((s) => {
+                          const isPostCorte = Boolean(
+                            s.submitted_at && s.submitted_at >= "2026-08-01"
+                          );
+                          const revStatus = s.revisao_status || "pendente";
+
+                          return (
+                            <tr key={s.token} className="border-b border-gray-100 hover:bg-gray-50">
+                              <td className="py-2 px-4">
+                                <button
+                                  onClick={() => abrirSubmissao(s.token)}
+                                  className="font-mono text-indigo-600 hover:underline text-left"
+                                >
+                                  {s.token}
+                                </button>
+                              </td>
+                              <td className="py-2 px-4 text-gray-700">{s.clan ?? "—"}</td>
+                              <td className="py-2 px-4 text-gray-700">{s.coach ?? "—"}</td>
+                              <td className="py-2 px-4 text-gray-700">
+                                {SUBMISSION_STATUS_LABELS[s.status] ?? s.status}
+                              </td>
+                              <td className="py-2 px-4 text-center">
+                                {isPostCorte ? (
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    <span
+                                      className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                                        revStatus === "aprovado"
+                                          ? "bg-green-100 text-green-700"
+                                          : revStatus === "reprovado"
+                                          ? "bg-red-100 text-red-700"
+                                          : "bg-amber-100 text-amber-700"
+                                      }`}
+                                    >
+                                      {revStatus.toUpperCase()}
+                                    </span>
+                                    <button
+                                      title="Aprovar submissão"
+                                      onClick={() => handleRevisarSubmissao(s.token, "aprovado")}
+                                      className="p-1 text-xs font-bold bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+                                    >
+                                      ✓
+                                    </button>
+                                    <button
+                                      title="Reprovar submissão"
+                                      onClick={() => handleRevisarSubmissao(s.token, "reprovado")}
+                                      className="p-1 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                                    >
+                                      ✗
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-gray-400">N/A (Legado)</span>
+                                )}
+                              </td>
+                              <td className="py-2 px-4 text-right text-gray-700">{s.points}</td>
+                              <td className="py-2 px-4 text-gray-500">{formatDateTime(s.submitted_at)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex items-center justify-between mt-3 px-1 text-sm text-gray-600 flex-wrap gap-2">
+                    <div>
+                      Mostrando{" "}
+                      <span className="font-semibold text-gray-800">
+                        {submissoesFiltradas.length > 0
+                          ? (paginaSubmissoes - 1) * TAMANHO_PAGINA_SUBMISSOES + 1
+                          : 0}
+                      </span>{" "}
+                      a{" "}
+                      <span className="font-semibold text-gray-800">
+                        {Math.min(paginaSubmissoes * TAMANHO_PAGINA_SUBMISSOES, submissoesFiltradas.length)}
+                      </span>{" "}
+                      de <span className="font-semibold text-gray-800">{submissoesFiltradas.length}</span> submissões
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPaginaSubmissoes((p) => Math.max(1, p - 1))}
+                        disabled={paginaSubmissoes === 1}
+                        className="px-3 py-1.5 text-xs font-medium bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        ← Anterior
+                      </button>
+                      <span className="text-xs font-medium text-gray-700 px-1">
+                        Página {paginaSubmissoes} de {totalPaginasSubmissoes}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPaginaSubmissoes((p) => Math.min(totalPaginasSubmissoes, p + 1))}
+                        disabled={paginaSubmissoes >= totalPaginasSubmissoes}
+                        className="px-3 py-1.5 text-xs font-medium bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Próxima →
+                      </button>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           </>

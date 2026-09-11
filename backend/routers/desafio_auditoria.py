@@ -38,6 +38,8 @@ class DesafioResponse(BaseModel):
     data: date | None = None
     data_inicio: date | None = None
     data_fim: date | None = None
+    prazo_apuracao: datetime | None = None
+    apurado_em: datetime | None = None
     origem: str
     nome_normalizado: str | None = None
     status: str
@@ -50,6 +52,31 @@ class DesafioResponse(BaseModel):
 class DesafioDetailResponse(DesafioResponse):
     pontos_por_clan: dict[str, int] = {}
     pontos_por_coach: dict[str, int] = {}
+
+
+class SetDesafioPrazoRequest(BaseModel):
+    prazo_apuracao: datetime | None = None
+
+
+class RevisarSubmissaoRequest(BaseModel):
+    status: Literal["aprovado", "reprovado", "pendente"]
+    revisado_por: str | None = None
+
+
+class ClanApuracaoEntry(BaseModel):
+    clan: str
+    participantes: int
+    total_grupo: int
+    percentual: float
+    pontos: int
+
+
+class DesafioApuracaoResponse(BaseModel):
+    desafio_id: int
+    prazo_apuracao: datetime | None = None
+    apurado_em: datetime | None = None
+    provisorio: bool
+    clas: list[ClanApuracaoEntry] = []
 
 
 class DesafioSubmissionResponse(BaseModel):
@@ -71,6 +98,9 @@ class DesafioSubmissionResponse(BaseModel):
     desafio_id: int | None = None
     submitted_at: datetime | None = None
     status: str
+    revisao_status: str = "pendente"
+    revisado_por: str | None = None
+    revisado_em: datetime | None = None
     invalid_reasons: list[str] = []
     points: int = 0
     content_hash: str
@@ -141,11 +171,16 @@ def _status_filtro_banco(status: Literal["active", "archived", "all"]) -> str | 
     return _STATUS_PARA_BANCO[status]
 
 
-def _com_coach(row: dict, alias_map: dict[str, str]) -> dict:
-    """Injeta `coach` (nome canônico da coluna B) numa linha de submissão/versão.
-    `raw_name` vazio → `coach` None (não vira "DESCONHECIDO")."""
+def _com_coach(row: dict, alias_map: dict[str, str], revisoes_map: dict[str, dict] | None = None) -> dict:
+    """Injeta `coach` (nome canônico da coluna B) e dados de revisão manual na linha de submissão/versão."""
     nome = (row.get("raw_name") or "").strip()
     row["coach"] = coach_identity.resolve_coach(nome, alias_map) if nome else None
+    token = row.get("token")
+    if token and revisoes_map is not None:
+        rev = revisoes_map.get(token, {})
+        row["revisao_status"] = rev.get("status", "pendente")
+        row["revisado_por"] = rev.get("revisado_por")
+        row["revisado_em"] = rev.get("revisado_em")
     return row
 
 
@@ -188,7 +223,19 @@ def obter_submissao(token: str):
     submissao = supabase_client.get_desafio_submission_current(token)
     if not submissao:
         raise HTTPException(status_code=404, detail="Token de submissão não encontrado")
-    return _com_coach(submissao, supabase_client.get_coach_alias_map())
+    revisoes = supabase_client.list_submissoes_revisoes()
+    return _com_coach(submissao, supabase_client.get_coach_alias_map(), revisoes)
+
+
+@router.post("/submissoes/{token}/revisar")
+def revisar_submissao(token: str, req: RevisarSubmissaoRequest):
+    """Aprova ou reprova uma submissão individual."""
+    submissao = supabase_client.get_desafio_submission_current(token)
+    if not submissao:
+        raise HTTPException(status_code=404, detail="Token de submissão não encontrado")
+    return supabase_client.revisar_submissao(
+        token=token, status=req.status, revisado_por=req.revisado_por
+    )
 
 
 @router.get(
@@ -196,9 +243,7 @@ def obter_submissao(token: str):
     response_model=list[DesafioSubmissionVersionResponse],
 )
 def listar_versoes_submissao(token: str):
-    """Lista o histórico imutável de versões de um token. Um token existente
-    sem nenhuma versão retorna lista vazia (não é 404) — 404 é reservado para
-    token desconhecido."""
+    """Lista o histórico imutável de versões de um token."""
     submissao = supabase_client.get_desafio_submission_current(token)
     if not submissao:
         raise HTTPException(status_code=404, detail="Token de submissão não encontrado")
@@ -225,6 +270,24 @@ def obter_desafio(desafio_id: int):
     }
 
 
+@router.patch("/{desafio_id:int}/prazo", response_model=DesafioResponse)
+def definir_prazo_desafio(desafio_id: int, req: SetDesafioPrazoRequest):
+    """Define ou altera o prazo de apuração de um desafio."""
+    desafio = supabase_client.get_desafio(desafio_id)
+    if not desafio:
+        raise HTTPException(status_code=404, detail="Desafio não encontrado")
+    return supabase_client.set_desafio_prazo(desafio_id=desafio_id, prazo=req.prazo_apuracao)
+
+
+@router.get("/{desafio_id:int}/apuracao", response_model=DesafioApuracaoResponse)
+def obter_apuracao_desafio(desafio_id: int):
+    """Retorna o estado de apuração do desafio (resultado final se apurado, prévia se em andamento)."""
+    desafio = supabase_client.get_desafio(desafio_id)
+    if not desafio:
+        raise HTTPException(status_code=404, detail="Desafio não encontrado")
+    return supabase_client.get_desafio_apuracao(desafio_id)
+
+
 @router.get("/{desafio_id:int}/submissoes", response_model=list[DesafioSubmissionResponse])
 def listar_submissoes_do_desafio(
     desafio_id: int,
@@ -238,8 +301,9 @@ def listar_submissoes_do_desafio(
     if not desafio:
         raise HTTPException(status_code=404, detail="Desafio não encontrado")
     alias_map = supabase_client.get_coach_alias_map()
+    revisoes_map = supabase_client.list_submissoes_revisoes(desafio_id)
     return [
-        _com_coach(s, alias_map)
+        _com_coach(s, alias_map, revisoes_map)
         for s in supabase_client.list_desafio_submissions_current(
             desafio_id=desafio_id, clan=clan, status=status, limit=limit, offset=offset
         )

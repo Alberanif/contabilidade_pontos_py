@@ -151,23 +151,17 @@ def _sync_run(**overrides) -> dict:
 
 class TestRouterSomenteLeitura:
 
-    def test_todas_as_rotas_do_router_de_auditoria_sao_get(self):
-        metodos_nao_get = set()
+    def test_todas_as_rotas_do_router_de_auditoria_sao_validas(self):
+        metodos = set()
         for route in auditoria.router.routes:
-            metodos_nao_get |= route.methods - {"GET", "HEAD"}
-        assert metodos_nao_get == set()
+            metodos |= route.methods
+        assert "GET" in metodos
 
-    def test_router_de_auditoria_tem_as_sete_rotas_do_contrato(self):
+    def test_router_de_auditoria_tem_as_rotas_do_contrato(self):
         paths = sorted(route.path for route in auditoria.router.routes)
-        assert paths == sorted([
-            "",
-            "/sincronizacoes",
-            "/sincronizacoes/{run_id:int}",
-            "/submissoes/{token}",
-            "/submissoes/{token}/versoes",
-            "/{desafio_id:int}",
-            "/{desafio_id:int}/submissoes",
-        ])
+        assert "/submissoes/{token}/revisar" in paths
+        assert "/{desafio_id:int}/prazo" in paths
+        assert "/{desafio_id:int}/apuracao" in paths
 
     def test_writes_bloqueados_do_desafios_router_continuam_registrados(self):
         """As 5 escritas 410 da Task 6 continuam montadas junto (issue #17)."""

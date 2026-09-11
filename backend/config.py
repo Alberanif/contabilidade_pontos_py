@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -85,5 +86,5 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.0"))
 
-
-
+# Desafios — Corte de vigência para apuração por percentual e aprovação manual
+DESAFIO_PERCENTUAL_CLAN_CORTE = date(2026, 8, 1)

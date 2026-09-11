@@ -11,6 +11,7 @@ from routers import (
     registros,
     clans,
     coaches,
+    coach_clas,
     desafios,
     desafio_auditoria,
     desafio_import,
@@ -36,6 +37,7 @@ app.include_router(contabilidade.router, prefix="/api/contabilidade", tags=["Con
 app.include_router(registros.router, prefix="/api/registros", tags=["Registros"])
 app.include_router(clans.router, prefix="/api/clans", tags=["Clãs"])
 app.include_router(coaches.router, prefix="/api/coaches", tags=["Coaches"])
+app.include_router(coach_clas.router, prefix="/api/coach-clas", tags=["Coaches"])
 
 # `desafios.router` (5 escritas bloqueadas com HTTP 410 — issue #17) e
 # `desafio_auditoria.router` (7 leituras de auditoria — issue #18) são dois

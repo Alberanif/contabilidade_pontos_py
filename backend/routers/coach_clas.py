@@ -8,19 +8,26 @@ adiciona validação de request, resolução de alias e as regras de
 409/404/422 que a camada de dados não trata (ela é um upsert simples, sem
 detecção de conflito).
 
-O nome de coach recebido em `POST`/`PUT` é sempre resolvido via
+O nome de coach recebido em `POST`/`PUT`/`DELETE` é sempre resolvido via
 `coach_identity.resolve_coach()` antes de qualquer leitura/gravação, para
 que um alias nunca cadastrado (variação de caixa/acento/espaço) não crie uma
-segunda linha para o mesmo coach.
+segunda linha para o mesmo coach — e para que os três endpoints de escrita
+concordem sobre qual linha um nome identifica.
+
+O campo `clan` é normalizado para a grafia canônica (`CLÃ 1`..`CLÃ 8`) via
+`desafio_sheet_parser.normalize_clan`, a mesma regra usada pelo script de
+importação — sem isso a API aceitaria um clã "fantasma" que nunca apareceria
+em nenhuma outra tela do sistema.
 """
 
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 import coach_identity
 import supabase_client
+from desafio_sheet_parser import normalize_clan
 
 router = APIRouter()
 
@@ -35,15 +42,52 @@ Categoria = Literal[
 ]
 
 
+def _clan_normalizado(value: str) -> str:
+    """Valida e normaliza para a grafia canônica ``CLÃ 1``..``CLÃ 8`` — mesma
+    regra usada pelo script de importação (`desafio_sheet_parser.normalize_clan`).
+    Sem essa validação, um `clan` livre gravaria um clã "fantasma" que nunca
+    aparece em nenhuma outra tela do sistema."""
+    normalizado = normalize_clan(value)
+    if normalizado is None:
+        raise ValueError(f"Clã inválido: '{value}'. Use CLÃ 1 a CLÃ 8.")
+    return normalizado
+
+
+def _coach_nao_vazio(value: str) -> str:
+    """Rejeita nome vazio/só espaço — sem isso, `resolve_coach()` resolveria
+    para o nome reservado 'DESCONHECIDO' e criaria um vínculo sem sentido."""
+    value = value.strip()
+    if not value:
+        raise ValueError("Nome do coach não pode ser vazio.")
+    return value
+
+
 class CoachClaCreate(BaseModel):
     coach: str
     clan: str
     categoria: Categoria
 
+    @field_validator("coach")
+    @classmethod
+    def _valida_coach(cls, v: str) -> str:
+        return _coach_nao_vazio(v)
+
+    @field_validator("clan")
+    @classmethod
+    def _valida_clan(cls, v: str) -> str:
+        return _clan_normalizado(v)
+
 
 class CoachClaUpdate(BaseModel):
     clan: str | None = None
     categoria: Categoria | None = None
+
+    @field_validator("clan")
+    @classmethod
+    def _valida_clan(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return _clan_normalizado(v)
 
 
 def _buscar_por_canonico(coach_canonico: str) -> dict | None:
@@ -105,6 +149,12 @@ def atualizar_coach_cla(coach_canonico: str, payload: CoachClaUpdate):
 @router.delete("/{coach_canonico}")
 def deletar_coach_cla(coach_canonico: str):
     """Remove o vínculo de um coach. Idempotente: chamar de novo para um
-    coach já removido (ou nunca vinculado) não é erro."""
+    coach já removido (ou nunca vinculado) não é erro.
+
+    Resolve o nome via alias antes de remover — mesma regra de identidade de
+    POST/PUT — para que remover pela grafia de um alias apague a mesma linha
+    que "Editar" enxergaria, em vez de ser um no-op silencioso."""
+    alias_map = supabase_client.get_coach_alias_map()
+    coach_canonico = coach_identity.resolve_coach(coach_canonico, alias_map)
     supabase_client.delete_coach_cla(coach_canonico)
     return {"mensagem": f"Vínculo de '{coach_canonico}' removido."}

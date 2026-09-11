@@ -197,6 +197,62 @@ class TestCriarCoachCla:
 
         assert resposta.status_code == 422
 
+    def test_422_clan_invalido(self, monkeypatch):
+        monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
+
+        def _falha_se_chamado(*args, **kwargs):
+            raise AssertionError("supabase_client não deveria ser chamado com payload inválido")
+
+        monkeypatch.setattr(supabase_client, "list_coach_clas", _falha_se_chamado)
+        monkeypatch.setattr(supabase_client, "upsert_coach_cla", _falha_se_chamado)
+
+        resposta = client.post(
+            "/api/coach-clas",
+            json={"coach": "Coach A", "clan": "Fenix", "categoria": "Coach"},
+        )
+
+        assert resposta.status_code == 422
+
+    def test_normaliza_grafia_alternativa_de_clan(self, monkeypatch):
+        """'clã 3' / '3' etc. devem normalizar para 'CLÃ 3' antes de qualquer
+        leitura/gravação — mesma regra de `desafio_sheet_parser.normalize_clan`."""
+        monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
+        monkeypatch.setattr(supabase_client, "list_coach_clas", lambda clan=None: [])
+        upsert_calls = []
+        monkeypatch.setattr(
+            supabase_client,
+            "upsert_coach_cla",
+            lambda coach_canonico, clan, categoria: (
+                upsert_calls.append((coach_canonico, clan, categoria)),
+                _row(coach_canonico=coach_canonico, clan=clan, categoria=categoria),
+            )[1],
+        )
+
+        resposta = client.post(
+            "/api/coach-clas",
+            json={"coach": "Coach A", "clan": "clã 3", "categoria": "Coach"},
+        )
+
+        assert resposta.status_code == 200
+        assert upsert_calls == [("Coach A", "CLÃ 3", "Coach")]
+
+    def test_422_nome_de_coach_vazio(self, monkeypatch):
+        """Nome vazio/só espaço não pode virar um registro 'DESCONHECIDO'."""
+        monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
+
+        def _falha_se_chamado(*args, **kwargs):
+            raise AssertionError("supabase_client não deveria ser chamado com nome vazio")
+
+        monkeypatch.setattr(supabase_client, "list_coach_clas", _falha_se_chamado)
+        monkeypatch.setattr(supabase_client, "upsert_coach_cla", _falha_se_chamado)
+
+        resposta = client.post(
+            "/api/coach-clas",
+            json={"coach": "   ", "clan": "CLÃ 1", "categoria": "Coach"},
+        )
+
+        assert resposta.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # PUT /api/coach-clas/{coach_canonico}
@@ -270,6 +326,32 @@ class TestAtualizarCoachCla:
         )
         assert resposta.status_code == 422
 
+    def test_422_clan_invalido(self, monkeypatch):
+        resposta = client.put("/api/coach-clas/Coach A", json={"clan": "Fenix"})
+        assert resposta.status_code == 422
+
+    def test_normaliza_grafia_alternativa_de_clan(self, monkeypatch):
+        monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
+        monkeypatch.setattr(
+            supabase_client,
+            "list_coach_clas",
+            lambda clan=None: [_row(clan="CLÃ 1", categoria="Coach")],
+        )
+        upsert_calls = []
+        monkeypatch.setattr(
+            supabase_client,
+            "upsert_coach_cla",
+            lambda coach_canonico, clan, categoria: (
+                upsert_calls.append((coach_canonico, clan, categoria)),
+                _row(coach_canonico=coach_canonico, clan=clan, categoria=categoria),
+            )[1],
+        )
+
+        resposta = client.put("/api/coach-clas/Coach A", json={"clan": "clã 3"})
+
+        assert resposta.status_code == 200
+        assert upsert_calls == [("Coach A", "CLÃ 3", "Coach")]
+
 
 # ---------------------------------------------------------------------------
 # DELETE /api/coach-clas/{coach_canonico}
@@ -279,6 +361,7 @@ class TestAtualizarCoachCla:
 class TestDeletarCoachCla:
 
     def test_remove_vinculo(self, monkeypatch):
+        monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
         chamadas = []
         monkeypatch.setattr(
             supabase_client, "delete_coach_cla", lambda coach_canonico: chamadas.append(coach_canonico)
@@ -290,6 +373,7 @@ class TestDeletarCoachCla:
         assert chamadas == ["Coach A"]
 
     def test_idempotente_ao_chamar_de_novo(self, monkeypatch):
+        monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
         chamadas = []
         monkeypatch.setattr(
             supabase_client, "delete_coach_cla", lambda coach_canonico: chamadas.append(coach_canonico)
@@ -301,3 +385,20 @@ class TestDeletarCoachCla:
         assert primeira.status_code == 200
         assert segunda.status_code == 200
         assert chamadas == ["Coach A", "Coach A"]
+
+    def test_resolve_alias_antes_de_remover(self, monkeypatch):
+        """Remover pelo nome bruto de um alias cadastrado deve apagar a
+        MESMA linha que 'Editar' enxergaria — mesma regra de identidade em
+        todos os endpoints de escrita (POST, PUT e DELETE)."""
+        monkeypatch.setattr(
+            supabase_client, "get_coach_alias_map", lambda: {"coach a (apelido)": "Coach A"}
+        )
+        chamadas = []
+        monkeypatch.setattr(
+            supabase_client, "delete_coach_cla", lambda coach_canonico: chamadas.append(coach_canonico)
+        )
+
+        resposta = client.delete("/api/coach-clas/Coach A (apelido)")
+
+        assert resposta.status_code == 200
+        assert chamadas == ["Coach A"]

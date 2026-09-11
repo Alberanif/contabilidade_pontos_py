@@ -45,6 +45,22 @@ function extrairClanDoErro409(mensagem: string): string | null {
 
 type FormState = { mode: "add" } | { mode: "edit"; coach: CoachCla };
 
+// Cor por categoria: mesmo nome de categoria sempre com a mesma cor, para que o
+// olho identifique o papel do coach sem precisar ler o texto do badge —
+// principalmente útil em clãs com muitos coaches na mesma tela.
+const CATEGORIA_BADGE: Record<string, string> = {
+  Coach: "bg-indigo-100 text-indigo-700",
+  "Coach Action": "bg-sky-100 text-sky-700",
+  "Coach Pro": "bg-violet-100 text-violet-700",
+  "Coach Hero": "bg-amber-100 text-amber-700",
+  "Sem Categoria": "bg-gray-100 text-gray-600",
+  "Novos ULTIMATES": "bg-emerald-100 text-emerald-700",
+};
+
+function categoriaBadgeClass(categoria: string): string {
+  return CATEGORIA_BADGE[categoria] ?? "bg-gray-100 text-gray-600";
+}
+
 export default function CoachesPorCla() {
   const [coaches, setCoaches] = useState<CoachCla[]>([]);
   const [loading, setLoading] = useState(true);
@@ -172,64 +188,86 @@ export default function CoachesPorCla() {
       ) : claOrdenados.length === 0 ? (
         <p className="text-gray-500">Nenhum coach encontrado para essa busca.</p>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="space-y-5">
           {claOrdenados.map((clan) => {
             const coachesDoClan = grupos.get(clan) ?? [];
             return (
               <div
                 key={clan}
                 data-testid={`clan-section-${clan}`}
-                className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-3"
+                className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
               >
-                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">{clan}</h3>
-                <ul className="divide-y divide-gray-100">
-                  {coachesDoClan.map((c) => (
-                    <li
-                      key={c.coach_canonico}
-                      data-testid={`coach-row-${c.coach_canonico}`}
-                      className="py-2 flex items-center justify-between gap-2 flex-wrap"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-gray-800">{c.coach_canonico}</span>
-                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700 whitespace-nowrap">
-                          {c.categoria}
-                        </span>
-                      </div>
-                      {confirmandoRemocao === c.coach_canonico ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-red-600">Remover este coach?</span>
-                          <button
-                            onClick={() => handleRemover(c.coach_canonico)}
-                            className="text-xs font-semibold text-white bg-red-600 hover:bg-red-700 px-2 py-1 rounded"
-                          >
-                            Confirmar remoção
-                          </button>
-                          <button
-                            onClick={() => setConfirmandoRemocao(null)}
-                            className="text-xs font-medium text-gray-600 hover:text-gray-800 px-2 py-1"
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setFormState({ mode: "edit", coach: c })}
-                            className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            onClick={() => setConfirmandoRemocao(c.coach_canonico)}
-                            className="text-xs font-medium text-red-600 hover:text-red-800 px-2 py-1"
-                          >
-                            Remover
-                          </button>
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <div className="flex items-baseline justify-between gap-3 px-5 py-3 border-b border-gray-100 bg-gray-50/60">
+                  <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">{clan}</h3>
+                  <span className="text-xs text-gray-400">
+                    {coachesDoClan.length} {coachesDoClan.length === 1 ? "coach" : "coaches"}
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide">
+                        <th className="px-5 py-2 font-medium">Coach</th>
+                        <th className="px-5 py-2 font-medium">Categoria</th>
+                        <th className="px-5 py-2 font-medium text-right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {coachesDoClan.map((c) => (
+                        <tr
+                          key={c.coach_canonico}
+                          data-testid={`coach-row-${c.coach_canonico}`}
+                          className="hover:bg-gray-50 transition-colors"
+                        >
+                          <td className="px-5 py-2.5 font-medium text-gray-800 whitespace-nowrap">
+                            {c.coach_canonico}
+                          </td>
+                          <td className="px-5 py-2.5">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${categoriaBadgeClass(c.categoria)}`}
+                            >
+                              {c.categoria}
+                            </span>
+                          </td>
+                          <td className="px-5 py-2.5 text-right">
+                            {confirmandoRemocao === c.coach_canonico ? (
+                              <div className="flex items-center justify-end gap-2 flex-wrap">
+                                <span className="text-xs text-red-600">Remover este coach?</span>
+                                <button
+                                  onClick={() => handleRemover(c.coach_canonico)}
+                                  className="text-xs font-semibold text-white bg-red-600 hover:bg-red-700 px-2 py-1 rounded"
+                                >
+                                  Confirmar remoção
+                                </button>
+                                <button
+                                  onClick={() => setConfirmandoRemocao(null)}
+                                  className="text-xs font-medium text-gray-600 hover:text-gray-800 px-2 py-1"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => setFormState({ mode: "edit", coach: c })}
+                                  className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1"
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  onClick={() => setConfirmandoRemocao(c.coach_canonico)}
+                                  className="text-xs font-medium text-red-600 hover:text-red-800 px-2 py-1"
+                                >
+                                  Remover
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             );
           })}

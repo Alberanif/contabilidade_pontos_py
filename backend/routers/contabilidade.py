@@ -785,9 +785,72 @@ def rejeitar_alias_pendente(body: RejeitarAliasPendenteRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao rejeitar alias pendente: {str(e)}")
 
 
+def processar_desafios_apuracao_prazo():
+    """Varre desafios cuja data prazo_apuracao <= NOW() e apurado_em é nulo/obsoleto,
+    rodando a apuração por percentual e aplicando os deltas no saldo total do clã.
+    """
+    from datetime import timezone
+    try:
+        desafios = supabase_client.list_desafios(status="all")
+        now_utc = datetime.now(timezone.utc)
+
+        for d in desafios:
+            prazo_str = d.get("prazo_apuracao")
+            apurado_em_str = d.get("apurado_em")
+            desafio_id = d["id"]
+
+            if not prazo_str:
+                continue
+
+            try:
+                prazo_dt = datetime.fromisoformat(prazo_str.replace("Z", "+00:00"))
+                if prazo_dt.tzinfo is None:
+                    prazo_dt = prazo_dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+
+            if prazo_dt <= now_utc:
+                precisa_apurar = False
+                if not apurado_em_str:
+                    precisa_apurar = True
+                else:
+                    try:
+                        apurado_dt = datetime.fromisoformat(apurado_em_str.replace("Z", "+00:00"))
+                        if apurado_dt.tzinfo is None:
+                            apurado_dt = apurado_dt.replace(tzinfo=timezone.utc)
+                        if apurado_dt < prazo_dt:
+                            precisa_apurar = True
+                    except ValueError:
+                        precisa_apurar = True
+
+                if precisa_apurar:
+                    apuracao_atual = supabase_client.get_desafio_apuracao(desafio_id)
+                    clas_novos = apuracao_atual.get("clas", [])
+
+                    apuracoes_anteriores = supabase_client.get_desafio_clan_apuracoes(desafio_id)
+                    pontos_antigos = {a["clan"]: a["pontos"] for a in apuracoes_anteriores}
+
+                    for item in clas_novos:
+                        clan = item["clan"]
+                        novos_pts = item["pontos"]
+                        pts_antigos = pontos_antigos.get(clan, 0)
+                        delta = novos_pts - pts_antigos
+                        if delta != 0:
+                            totais = supabase_client.get_clan_totals()
+                            atual = totais.get(clan, 0)
+                            supabase_client.upsert_clan_total(clan=clan, total=max(0, atual + delta))
+
+                    res_map = {item["clan"]: item for item in clas_novos}
+                    supabase_client.salvar_apuracao_clan(desafio_id, res_map)
+    except Exception as e:
+        # Isolamento: falha na apuração por percentual não invalida a contabilidade
+        print(f"Erro ao processar apuração por prazo de desafios: {e}")
+
+
 @router.post("/executar", response_model=ExecutarResponse)
 def executar_contabilidade():
     desafios_result = _sync_desafios_isolado()
+    processar_desafios_apuracao_prazo()
     try:
         rows = google_sheets_client.fetch_records()
         if not rows:

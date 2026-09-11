@@ -293,6 +293,8 @@ export interface DesafioAuditoria {
   data: string | null;
   data_inicio: string | null;
   data_fim: string | null;
+  prazo_apuracao: string | null;
+  apurado_em: string | null;
   origem: string;
   nome_normalizado: string | null;
   status: string; // "ativo" | "arquivado" (valor bruto do banco)
@@ -329,6 +331,9 @@ export interface DesafioSubmissao {
   desafio_id: number | null;
   submitted_at: string | null;
   status: string; // "active_counted" | "active_not_counted" | "invalid" | "conflicted" | "inactive_missing" | "blocked_by_guardrail"
+  revisao_status?: "pendente" | "aprovado" | "reprovado";
+  revisado_por?: string | null;
+  revisado_em?: string | null;
   invalid_reasons: string[];
   points: number;
   content_hash: string;
@@ -512,6 +517,45 @@ export function updateCoachCla(
 export function deleteCoachCla(coachCanonico: string): Promise<void> {
   return request(`/api/coach-clas/${encodeURIComponent(coachCanonico)}`, {
     method: "DELETE",
+  });
+}
+
+// --- Desafios: Apuração por Percentual e Prazo ---
+
+export interface ClanApuracaoEntry {
+  clan: string;
+  participantes: number;
+  total_grupo: number;
+  percentual: number;
+  pontos: number;
+}
+
+export interface DesafioApuracaoResponse {
+  desafio_id: number;
+  prazo_apuracao: string | null;
+  apurado_em: string | null;
+  provisorio: boolean;
+  clas: ClanApuracaoEntry[];
+}
+
+export function setDesafioPrazo(desafioId: number, prazo: string | null): Promise<DesafioAuditoria> {
+  return request(`/api/desafios/${desafioId}/prazo`, {
+    method: "PATCH",
+    body: JSON.stringify({ prazo_apuracao: prazo }),
+  });
+}
+
+export function getDesafioApuracao(desafioId: number): Promise<DesafioApuracaoResponse> {
+  return request(`/api/desafios/${desafioId}/apuracao`);
+}
+
+export function revisarSubmissao(
+  token: string,
+  status: "aprovado" | "reprovado" | "pendente"
+): Promise<{ token: string; status: string }> {
+  return request(`/api/desafios/submissoes/${token}/revisar`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
   });
 }
 

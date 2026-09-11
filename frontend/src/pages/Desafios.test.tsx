@@ -28,6 +28,15 @@ vi.mock("../api/client", async (importOriginal) => {
     fetchVersoesDaSubmissao: vi.fn(),
     fetchSincronizacoes: vi.fn(),
     fetchSincronizacao: vi.fn(),
+    getDesafioApuracao: vi.fn().mockResolvedValue({
+      desafio_id: 1,
+      prazo_apuracao: null,
+      apurado_em: null,
+      provisorio: true,
+      clas: [],
+    }),
+    setDesafioPrazo: vi.fn(),
+    revisarSubmissao: vi.fn(),
   };
 });
 
@@ -39,6 +48,8 @@ function buildDesafio(overrides: Partial<DesafioAuditoria> = {}): DesafioAuditor
     data: null,
     data_inicio: "2026-08-01",
     data_fim: "2026-08-10",
+    prazo_apuracao: null,
+    apurado_em: null,
     origem: "google_sheets",
     nome_normalizado: "semana de treinos",
     status: "ativo",
@@ -244,13 +255,7 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     render(<Desafios />);
     await user.click(await screen.findByText("Semana de Treinos"));
 
-    const pontosPorClan = await screen.findByTestId("pontos-por-clan");
-    expect(within(pontosPorClan).getByText("CLÃ 1")).toBeInTheDocument();
-    expect(within(pontosPorClan).getByText("120")).toBeInTheDocument();
-
-    const pontosPorCoach = await screen.findByTestId("pontos-por-coach");
-    expect(within(pontosPorCoach).getByText("Ana Albertim")).toBeInTheDocument();
-    expect(within(pontosPorCoach).getByText("40")).toBeInTheDocument();
+    expect(await screen.findByText("Nenhuma apuração de engajamento disponível para este desafio.")).toBeInTheDocument();
 
     expect(fetchDesafioAuditoria).toHaveBeenCalledWith(1);
     expect(fetchSubmissoesDoDesafio).toHaveBeenCalledWith(1, expect.objectContaining({}));
@@ -497,5 +502,30 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     expect(await screen.findByTestId("sync-run-detail")).toBeInTheDocument();
     expect(fetchSincronizacao).toHaveBeenCalledWith(7);
     expect(screen.getAllByText(/succeeded|sucesso/i).length).toBeGreaterThan(0);
+  });
+
+  it("paginates submissoes 10 items per page and allows page navigation", async () => {
+    const list = Array.from({ length: 15 }, (_, i) =>
+      buildSubmissao({ token: `tok-${i + 1}`, coach: `Coach ${i + 1}` })
+    );
+    vi.mocked(fetchSubmissoesDoDesafio).mockReset().mockResolvedValue(list);
+
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await user.click(await screen.findByText("Semana de Treinos"));
+
+    expect(await screen.findByText("tok-1")).toBeInTheDocument();
+    expect(screen.getByText("tok-10")).toBeInTheDocument();
+    expect(screen.queryByText("tok-11")).not.toBeInTheDocument();
+    expect(screen.getByText(/mostrando/i)).toBeInTheDocument();
+    expect(screen.getByText(/página 1 de 2/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /próxima →/i }));
+
+    expect(screen.getByText("tok-11")).toBeInTheDocument();
+    expect(screen.getByText("tok-15")).toBeInTheDocument();
+    expect(screen.queryByText("tok-1")).not.toBeInTheDocument();
+    expect(screen.getByText(/mostrando/i)).toBeInTheDocument();
+    expect(screen.getByText(/página 2 de 2/i)).toBeInTheDocument();
   });
 });

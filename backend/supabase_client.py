@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Any
 from supabase import create_client, Client
 
 import coach_identity
@@ -19,6 +20,8 @@ TABLE_DESAFIO_SYNC_RUNS = "desafio_sync_runs"
 TABLE_DESAFIO_SUBMISSIONS_CURRENT = "desafio_submissions_current"
 TABLE_DESAFIO_SUBMISSION_VERSIONS = "desafio_submission_versions"
 TABLE_COACH_CLAS = "pontos_ultimate_coach_clas"
+TABLE_DESAFIO_SUBMISSAO_REVISOES = "desafio_submissao_revisoes"
+TABLE_DESAFIO_CLAN_APURACOES = "desafio_clan_apuracoes"
 
 
 def _get_client() -> Client:
@@ -1333,3 +1336,192 @@ def get_tipo_coach_totals(
         if complete:
             totals[coach] = totals.get(coach, 0) + complete
     return totals
+
+
+# --- Apuração por Percentual & Revisão Manual de Desafios ---
+
+
+def set_desafio_prazo(desafio_id: int, prazo: datetime | str | None) -> dict:
+    """Define ou edita o prazo de apuração de um desafio."""
+    client = _get_client()
+    if isinstance(prazo, datetime):
+        prazo_str = prazo.isoformat()
+    else:
+        prazo_str = prazo
+
+    desafio = get_desafio(desafio_id)
+    if not desafio:
+        raise ValueError("Desafio não encontrado")
+
+    payload: dict = {"prazo_apuracao": prazo_str}
+
+    # Se reabrindo para o futuro ou limpando o prazo, limpa apurado_em
+    from datetime import timezone
+    now_utc = datetime.now(timezone.utc)
+    if prazo_str is None:
+        payload["apurado_em"] = None
+    elif isinstance(prazo, datetime):
+        if prazo > now_utc:
+            payload["apurado_em"] = None
+    else:
+        try:
+            dt = datetime.fromisoformat(prazo_str.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt > now_utc:
+                payload["apurado_em"] = None
+        except ValueError:
+            pass
+
+    result = client.table(TABLE_DESAFIOS).update(payload).eq("id", desafio_id).execute()
+    return result.data[0] if result.data else {}
+
+
+def revisar_submissao(token: str, status: str, revisado_por: str | None = None) -> dict:
+    """Aprova ou reprova uma submissão individual na tabela `desafio_submissao_revisoes`."""
+    if status not in ("aprovado", "reprovado", "pendente"):
+        raise ValueError(f"Status de revisão inválido: {status}")
+
+    from datetime import timezone
+    client = _get_client()
+    now_str = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "token": token,
+        "status": status,
+        "revisado_por": revisado_por,
+        "revisado_em": now_str,
+        "updated_at": now_str,
+    }
+    result = client.table(TABLE_DESAFIO_SUBMISSAO_REVISOES).upsert(
+        payload, on_conflict="token"
+    ).execute()
+    return result.data[0] if result.data else {}
+
+
+def list_submissoes_revisoes(desafio_id: int | None = None) -> dict[str, dict]:
+    """Retorna o mapeamento token -> dict de revisão (status, revisado_por, revisado_em)."""
+    try:
+        client = _get_client()
+        query = client.table(TABLE_DESAFIO_SUBMISSAO_REVISOES).select("*")
+        result = query.execute()
+        return {row["token"]: row for row in (result.data or [])}
+    except Exception:
+        return {}
+
+
+def get_desafio_clan_apuracoes(desafio_id: int) -> list[dict]:
+    """Retorna os registros de apuração gravados em `desafio_clan_apuracoes` para um desafio."""
+    try:
+        client = _get_client()
+        result = (
+            client.table(TABLE_DESAFIO_CLAN_APURACOES)
+            .select("*")
+            .eq("desafio_id", desafio_id)
+            .order("clan", desc=False)
+            .execute()
+        )
+        return result.data or []
+    except Exception:
+        return []
+
+
+def salvar_apuracao_clan(desafio_id: int, resultados: dict[str, Any]) -> None:
+    """Salva/upserta os resultados de apuração por clã em `desafio_clan_apuracoes`
+    e marca `apurado_em` na tabela `desafios`."""
+    from datetime import timezone
+    client = _get_client()
+    now_str = datetime.now(timezone.utc).isoformat()
+
+    rows_to_upsert = []
+    for clan, ap in resultados.items():
+        data = ap.to_dict() if hasattr(ap, "to_dict") else ap
+        rows_to_upsert.append({
+            "desafio_id": desafio_id,
+            "clan": clan,
+            "participantes": data["participantes"],
+            "total_grupo": data["total_grupo"],
+            "percentual": float(data["percentual"]),
+            "pontos": int(data["pontos"]),
+            "apurado_em": now_str,
+        })
+
+    if rows_to_upsert:
+        client.table(TABLE_DESAFIO_CLAN_APURACOES).upsert(
+            rows_to_upsert, on_conflict="desafio_id,clan"
+        ).execute()
+
+    client.table(TABLE_DESAFIOS).update({"apurado_em": now_str}).eq("id", desafio_id).execute()
+
+
+def get_desafio_apuracao(desafio_id: int) -> dict:
+    """Retorna o estado de apuração do desafio: resultado final se apurado, ou prévia se em andamento."""
+    desafio = get_desafio(desafio_id)
+    if not desafio:
+        return {"desafio_id": desafio_id, "error": "Desafio não encontrado"}
+
+    prazo_apuracao = desafio.get("prazo_apuracao")
+    apurado_em = desafio.get("apurado_em")
+
+    if apurado_em:
+        apuracoes = get_desafio_clan_apuracoes(desafio_id)
+        return {
+            "desafio_id": desafio_id,
+            "prazo_apuracao": prazo_apuracao,
+            "apurado_em": apurado_em,
+            "provisorio": False,
+            "clas": apuracoes,
+        }
+
+    submissoes = list_desafio_submissions_current(desafio_id=desafio_id, status="active_counted")
+    revisoes_map = list_submissoes_revisoes(desafio_id)
+    alias_map = get_coach_alias_map()
+
+    aprovadas = []
+    for s in submissoes:
+        sub_date = _submitted_at_local_date(s.get("submitted_at"))
+        token = s.get("token")
+        rev = revisoes_map.get(token, {})
+        rev_status = rev.get("status", "pendente")
+
+        # Pós-corte requer status == 'aprovado'
+        if sub_date and sub_date >= config.DESAFIO_PERCENTUAL_CLAN_CORTE:
+            if rev_status == "aprovado":
+                raw_name = (s.get("raw_name") or "").strip()
+                canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
+                aprovadas.append({
+                    "coach": canonical or raw_name,
+                    "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
+                })
+        else:
+            # Pre-corte conta se active_counted
+            raw_name = (s.get("raw_name") or "").strip()
+            canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
+            aprovadas.append({
+                "coach": canonical or raw_name,
+                "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
+            })
+
+    from desafio_percentual_clan import apurar_desafio
+    rows_clas = list_coach_clas()
+    coach_clas = {r["coach_canonico"]: r["clan"] for r in rows_clas}
+    tamanho_grupo: dict[str, int] = {}
+    for r in rows_clas:
+        c = r["clan"]
+        tamanho_grupo[c] = tamanho_grupo.get(c, 0) + 1
+
+    todos_clas = ["CLÃ 1", "CLÃ 2", "CLÃ 3", "CLÃ 4", "CLÃ 5", "CLÃ 6", "CLÃ 7", "CLÃ 8"]
+    res_dict = apurar_desafio(
+        submissoes_aprovadas=aprovadas,
+        coach_clas=coach_clas,
+        tamanho_grupo_por_clan=tamanho_grupo,
+        todos_os_clas=todos_clas,
+    )
+
+    clas_list = [ap.to_dict() for ap in res_dict.values()]
+    return {
+        "desafio_id": desafio_id,
+        "prazo_apuracao": prazo_apuracao,
+        "apurado_em": None,
+        "provisorio": True,
+        "clas": clas_list,
+    }

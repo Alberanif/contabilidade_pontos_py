@@ -278,4 +278,68 @@ describe("CoachesPorCla (CRUD - issue #7)", () => {
     await waitFor(() => expect(screen.queryByText("Ana Albertim")).not.toBeInTheDocument());
     expect(fetchCoachClas).toHaveBeenCalledTimes(2);
   });
+
+  describe("paginação 'Ver mais' por clã", () => {
+    function buildSeisCoachesDoClan1(): CoachCla[] {
+      return Array.from({ length: 6 }, (_, i) =>
+        buildCoachCla({ coach_canonico: `Coach ${i + 1}`, clan: "CLÃ 1", categoria: "Ouro" })
+      );
+    }
+
+    it("mostra só os 5 primeiros coaches de um clã com mais de 5, com um botão 'Ver mais'", async () => {
+      vi.mocked(fetchCoachClas).mockResolvedValue(buildSeisCoachesDoClan1());
+
+      render(<CoachesPorCla />);
+
+      const clan1 = await screen.findByTestId("clan-section-CLÃ 1");
+      for (let i = 1; i <= 5; i++) {
+        expect(within(clan1).getByText(`Coach ${i}`)).toBeInTheDocument();
+      }
+      expect(within(clan1).queryByText("Coach 6")).not.toBeInTheDocument();
+      expect(within(clan1).getByRole("button", { name: /ver mais/i })).toBeInTheDocument();
+    });
+
+    it("não mostra o botão 'Ver mais' quando o clã tem 5 coaches ou menos", async () => {
+      vi.mocked(fetchCoachClas).mockResolvedValue(buildSeisCoachesDoClan1().slice(0, 5));
+
+      render(<CoachesPorCla />);
+
+      const clan1 = await screen.findByTestId("clan-section-CLÃ 1");
+      expect(within(clan1).getByText("Coach 5")).toBeInTheDocument();
+      expect(within(clan1).queryByRole("button", { name: /ver mais/i })).not.toBeInTheDocument();
+    });
+
+    it("clicar em 'Ver mais' revela o restante e troca para 'Ver menos', que recolhe de volta", async () => {
+      vi.mocked(fetchCoachClas).mockResolvedValue(buildSeisCoachesDoClan1());
+      const user = userEvent.setup();
+
+      render(<CoachesPorCla />);
+
+      const clan1 = await screen.findByTestId("clan-section-CLÃ 1");
+      await user.click(within(clan1).getByRole("button", { name: /ver mais/i }));
+
+      expect(within(clan1).getByText("Coach 6")).toBeInTheDocument();
+      const botaoVerMenos = within(clan1).getByRole("button", { name: /ver menos/i });
+      expect(botaoVerMenos).toBeInTheDocument();
+
+      await user.click(botaoVerMenos);
+
+      expect(within(clan1).queryByText("Coach 6")).not.toBeInTheDocument();
+      expect(within(clan1).getByRole("button", { name: /ver mais/i })).toBeInTheDocument();
+    });
+
+    it("busca por nome ignora o limite de 5 e mostra todos os resultados encontrados no clã", async () => {
+      vi.mocked(fetchCoachClas).mockResolvedValue(buildSeisCoachesDoClan1());
+      const user = userEvent.setup();
+
+      render(<CoachesPorCla />);
+      await screen.findByTestId("clan-section-CLÃ 1");
+
+      await user.type(screen.getByLabelText(/buscar por nome/i), "Coach");
+
+      const clan1 = screen.getByTestId("clan-section-CLÃ 1");
+      expect(within(clan1).getByText("Coach 6")).toBeInTheDocument();
+      expect(within(clan1).queryByRole("button", { name: /ver mais/i })).not.toBeInTheDocument();
+    });
+  });
 });

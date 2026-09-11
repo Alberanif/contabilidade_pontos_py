@@ -61,6 +61,11 @@ function categoriaBadgeClass(categoria: string): string {
   return CATEGORIA_BADGE[categoria] ?? "bg-gray-100 text-gray-600";
 }
 
+// Quantos coaches mostrar por clã antes de exigir um clique em "Ver mais" —
+// clãs reais têm ~20 coaches, e uma lista tão longa por padrão prejudicava a
+// visão geral da tela (motivo da mudança).
+const LIMITE_PADRAO_POR_CLA = 5;
+
 export default function CoachesPorCla() {
   const [coaches, setCoaches] = useState<CoachCla[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,6 +73,20 @@ export default function CoachesPorCla() {
   const [busca, setBusca] = useState("");
   const [formState, setFormState] = useState<FormState | null>(null);
   const [confirmandoRemocao, setConfirmandoRemocao] = useState<string | null>(null);
+  // Clãs que o usuário expandiu manualmente além do limite padrão.
+  const [clasExpandidos, setClasExpandidos] = useState<Set<string>>(new Set());
+
+  function alternarExpandido(clan: string) {
+    setClasExpandidos((atual) => {
+      const proximo = new Set(atual);
+      if (proximo.has(clan)) {
+        proximo.delete(clan);
+      } else {
+        proximo.add(clan);
+      }
+      return proximo;
+    });
+  }
 
   useEffect(() => {
     let cancelado = false;
@@ -191,6 +210,15 @@ export default function CoachesPorCla() {
         <div className="space-y-5">
           {claOrdenados.map((clan) => {
             const coachesDoClan = grupos.get(clan) ?? [];
+            // Busca ativa: mostra todos os resultados encontrados, sem
+            // esconder atrás de "Ver mais" — o ponto de buscar é achar algo
+            // específico rápido, não navegar por página.
+            const buscaAtiva = normalizarBusca(busca) !== "";
+            const expandido = buscaAtiva || clasExpandidos.has(clan);
+            const temMais = coachesDoClan.length > LIMITE_PADRAO_POR_CLA;
+            const coachesVisiveis = expandido
+              ? coachesDoClan
+              : coachesDoClan.slice(0, LIMITE_PADRAO_POR_CLA);
             return (
               <div
                 key={clan}
@@ -213,7 +241,7 @@ export default function CoachesPorCla() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {coachesDoClan.map((c) => (
+                      {coachesVisiveis.map((c) => (
                         <tr
                           key={c.coach_canonico}
                           data-testid={`coach-row-${c.coach_canonico}`}
@@ -268,6 +296,18 @@ export default function CoachesPorCla() {
                     </tbody>
                   </table>
                 </div>
+                {!buscaAtiva && temMais && (
+                  <div className="px-5 py-2.5 border-t border-gray-100 bg-gray-50/40">
+                    <button
+                      onClick={() => alternarExpandido(clan)}
+                      className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+                    >
+                      {expandido
+                        ? "Ver menos"
+                        : `Ver mais (${coachesDoClan.length - LIMITE_PADRAO_POR_CLA})`}
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

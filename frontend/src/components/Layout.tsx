@@ -6,6 +6,7 @@ const links = [
   { to: "/fila", label: "Fila" },
   { to: "/desafios", label: "Desafios" },
   { to: "/contabilidade", label: "Contabilidade" },
+  { to: "/coaches-por-cla", label: "Coaches por Clã" },
 ];
 
 export default function Layout() {

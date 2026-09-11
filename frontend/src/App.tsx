@@ -5,6 +5,7 @@ import Registros from "./pages/Registros";
 import Contabilidade from "./pages/Contabilidade";
 import Fila from "./pages/Fila";
 import Desafios from "./pages/Desafios";
+import CoachesPorCla from "./pages/CoachesPorCla";
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/fila" element={<Fila />} />
           <Route path="/contabilidade" element={<Contabilidade />} />
           <Route path="/desafios" element={<Desafios />} />
+          <Route path="/coaches-por-cla" element={<CoachesPorCla />} />
         </Route>
       </Routes>
     </BrowserRouter>

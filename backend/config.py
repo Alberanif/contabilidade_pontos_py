@@ -43,6 +43,15 @@ POINTS_PER_DESAFIO_SUBMISSION = int(
     os.getenv("POINTS_PER_DESAFIO_SUBMISSION", "10")
 )
 
+# Pontuação individual do coach por desafio — separada do valor de clã acima
+# (que continua alimentando só o crédito contínuo por token do clã). A partir
+# do corte de vigência (DESAFIO_PERCENTUAL_CLAN_CORTE, definido abaixo), exige
+# também aprovação manual na plataforma (revisao_status == "aprovado"),
+# espelhando a mesma regra que a apuração por percentual do clã já aplica.
+POINTS_PER_DESAFIO_SUBMISSION_COACH = int(
+    os.getenv("POINTS_PER_DESAFIO_SUBMISSION_COACH", "100")
+)
+
 # Planilha de Registros Pro-bono (opcional — não interrompe startup se ausente)
 GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID = os.getenv("GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID")
 GSHEET_RECORDS_PRO_BONO_SHEET_NAME = os.getenv("GSHEET_RECORDS_PRO_BONO_SHEET_NAME")

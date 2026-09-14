@@ -23,7 +23,8 @@ documento, não este. Este runbook assume a migração já concluída.
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | credencial da service account (JSON completo, uma linha) | sim |
 | `GSHEET_DESAFIOS_SPREADSHEET_ID` | ID da planilha oficial de desafios | sim |
 | `GSHEET_DESAFIOS_SHEET_NAME` | nome da aba dentro da planilha | sim |
-| `POINTS_PER_DESAFIO_SUBMISSION` | pontos por submissão elegível (padrão `10`) | não (tem default) |
+| `POINTS_PER_DESAFIO_SUBMISSION` | pontos de **clã** por submissão elegível (padrão `10`) — crédito contínuo por token, separado do bônus por percentual (seção "Fase 2" abaixo) | não (tem default) |
+| `POINTS_PER_DESAFIO_SUBMISSION_COACH` | pontos **individuais do coach** por submissão elegível (padrão `100`) — a partir do corte de vigência (`config.DESAFIO_PERCENTUAL_CLAN_CORTE`), só conta se a submissão também tiver revisão manual aprovada na plataforma | não (tem default) |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | acesso ao RPC `apply_desafio_reconciliation` e às tabelas de leitura | sim (compartilhada com o resto do backend) |
 | `LOG_LEVEL` | nível do logging estruturado (`backend/logging_config.py`), padrão `INFO` | não |
 

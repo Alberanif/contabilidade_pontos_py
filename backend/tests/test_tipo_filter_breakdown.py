@@ -159,8 +159,9 @@ class TestGetTipoCoachTotalsDesafiosLeTokens:
              "submitted_at": "2026-05-11T13:00:00-03:00"},
         ]
         with patch("supabase_client.fetch_active_counted_desafio_submissions", return_value=rows), \
-             patch("supabase_client.get_coach_alias_map", return_value={"ANA": "Ana"}):
-            assert supabase_client.get_tipo_coach_totals("desafios") == {"Ana": 20}
+             patch("supabase_client.get_coach_alias_map", return_value={"ANA": "Ana"}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
+            assert supabase_client.get_tipo_coach_totals("desafios") == {"Ana": 200}
 
     def test_com_data_delega_para_get_period_desafio_coach_totals(self):
         with patch("supabase_client.get_period_desafio_coach_totals",

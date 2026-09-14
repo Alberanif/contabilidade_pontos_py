@@ -172,15 +172,24 @@ def _status_filtro_banco(status: Literal["active", "archived", "all"]) -> str | 
 
 
 def _com_coach(row: dict, alias_map: dict[str, str], revisoes_map: dict[str, dict] | None = None) -> dict:
-    """Injeta `coach` (nome canônico da coluna B) e dados de revisão manual na linha de submissão/versão."""
+    """Injeta `coach` (nome canônico da coluna B) e dados de revisão manual na
+    linha de submissão/versão. Quando `revisoes_map` é dado (linhas de
+    submissão — não de histórico de versão, que não tem esse parâmetro),
+    também substitui `points` pelo valor individual do coach para aquela
+    linha (`supabase_client.desafio_submission_pontos_individuais_coach`),
+    já que o `points` gravado é a taxa de clã, não a do coach."""
     nome = (row.get("raw_name") or "").strip()
     row["coach"] = coach_identity.resolve_coach(nome, alias_map) if nome else None
     token = row.get("token")
     if token and revisoes_map is not None:
         rev = revisoes_map.get(token, {})
-        row["revisao_status"] = rev.get("status", "pendente")
+        revisao_status = rev.get("status", "pendente")
+        row["revisao_status"] = revisao_status
         row["revisado_por"] = rev.get("revisado_por")
         row["revisado_em"] = rev.get("revisado_em")
+        row["points"] = supabase_client.desafio_submission_pontos_individuais_coach(
+            row.get("status"), row.get("submitted_at"), revisao_status
+        )
     return row
 
 

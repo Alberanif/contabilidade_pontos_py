@@ -267,13 +267,15 @@ class TestGetPeriodDesafioCoachTotals:
         with patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=rows), \
              patch("supabase_client.get_coach_alias_map",
-                   return_value={"ana albertim": "Ana Albertim"}):
+                   return_value={"ana albertim": "Ana Albertim"}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
             result = supabase_client.get_period_desafio_coach_totals(INICIO, FIM)
-        assert result == {"Ana Albertim": 30, "Gustavo Imhof": 10}
+        assert result == {"Ana Albertim": 200, "Gustavo Imhof": 100}
 
     def test_sem_desafio_no_periodo_retorna_vazio(self):
         with patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=[]), \
-             patch("supabase_client.get_coach_alias_map", return_value={}):
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
             result = supabase_client.get_period_desafio_coach_totals(INICIO, FIM)
         assert result == {}

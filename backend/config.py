@@ -90,6 +90,14 @@ BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
 COL_DATE_PAYING   = 10  # Coluna K (índice 10) — data na planilha de clientes pagantes
 COL_DATE_PRO_BONO = 9   # Coluna J (índice 9)  — data na planilha de pro-bono
 
+# Data de início da contabilização — nenhum registro anterior a esta data conta
+# para pontos, em nenhuma fonte (Coaching Individual, Coaching em Grupo/Empresa,
+# Pro-bono). Aplicada em /executar e /reprocessar via
+# points_engine.filter_records_by_date_from, antes de inserir/contar qualquer
+# registro. Separada de DESAFIO_PERCENTUAL_CLAN_CORTE (abaixo) — mesmo valor
+# hoje, mas são regras independentes que podem divergir no futuro.
+DATA_INICIO_CONTABILIZACAO = date(2026, 8, 1)
+
 # Groq LLM Agent (opcional)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")

@@ -4,7 +4,14 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from points_engine import compute_batch_promotions_by_people, build_record_data
+from datetime import date
+
+from points_engine import (
+    compute_batch_promotions_by_people,
+    build_record_data,
+    sum_registros_pontos_from_date,
+    build_totais_recalculo_plan,
+)
 
 
 def make_records(counts: list[int]) -> list[dict]:
@@ -175,3 +182,115 @@ def test_build_record_data_data_registro_none_quando_coluna_ausente():
         date_col=10,  # índice fora do range da row
     )
     assert result["data_registro"] is None
+
+
+def _registro(clan, coach, pontos, pontos_coach, data_registro, modalidade="Coaching Individual"):
+    return {
+        "clan": clan, "coach": coach, "pontos": pontos, "pontos_coach": pontos_coach,
+        "modalidade": modalidade, "data_registro": data_registro,
+    }
+
+
+class TestSumRegistrosPontosFromDate:
+    """Correção retroativa não-destrutiva: soma `pontos`/`pontos_coach` de
+    linhas já gravadas em `pontos_ultimate_registros_contabilizados`,
+    filtrando por `data_registro >= start_date` — sem apagar/alterar nenhuma
+    linha (a leitura é só-leitura; quem escreve é o chamador)."""
+
+    CORTE = date(2026, 8, 1)
+
+    def test_registro_pagante_apos_o_corte_conta_em_total_pagante(self):
+        rows = [_registro("CLÃ 1", "Ana", 30, 30, "2026-08-15")]
+        por_clan, por_coach = sum_registros_pontos_from_date(rows, self.CORTE)
+        assert por_clan == {"CLÃ 1": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30}}
+        assert por_coach == {"Ana": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30}}
+
+    def test_registro_pro_bono_apos_o_corte_conta_em_total_pro_bono(self):
+        rows = [_registro("CLÃ 1", "Ana", 10, 10, "2026-08-15", modalidade="Pro-bono")]
+        por_clan, por_coach = sum_registros_pontos_from_date(rows, self.CORTE)
+        assert por_clan == {"CLÃ 1": {"total_pagante": 0, "total_pro_bono": 10, "total_pontos": 10}}
+        assert por_coach == {"Ana": {"total_pagante": 0, "total_pro_bono": 10, "total_pontos": 10}}
+
+    def test_registro_anterior_ao_corte_e_ignorado(self):
+        rows = [_registro("CLÃ 1", "Ana", 30, 30, "2026-07-31")]
+        por_clan, por_coach = sum_registros_pontos_from_date(rows, self.CORTE)
+        assert por_clan == {}
+        assert por_coach == {}
+
+    def test_registro_exatamente_no_corte_conta(self):
+        rows = [_registro("CLÃ 1", "Ana", 30, 30, "2026-08-01")]
+        por_clan, _ = sum_registros_pontos_from_date(rows, self.CORTE)
+        assert por_clan == {"CLÃ 1": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30}}
+
+    def test_soma_multiplos_registros_do_mesmo_cla_e_coach(self):
+        rows = [
+            _registro("CLÃ 1", "Ana", 30, 30, "2026-08-10"),
+            _registro("CLÃ 1", "Ana", 30, 30, "2026-08-20"),
+            _registro("CLÃ 1", "Ana", 10, 10, "2026-08-25", modalidade="Pro-bono"),
+        ]
+        por_clan, por_coach = sum_registros_pontos_from_date(rows, self.CORTE)
+        assert por_clan == {"CLÃ 1": {"total_pagante": 60, "total_pro_bono": 10, "total_pontos": 70}}
+        assert por_coach == {"Ana": {"total_pagante": 60, "total_pro_bono": 10, "total_pontos": 70}}
+
+    def test_registro_sem_coach_ainda_conta_para_o_cla(self):
+        rows = [_registro("CLÃ 1", "", 30, 0, "2026-08-10")]
+        por_clan, por_coach = sum_registros_pontos_from_date(rows, self.CORTE)
+        assert por_clan == {"CLÃ 1": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30}}
+        assert por_coach == {}
+
+    def test_data_registro_ausente_ou_invalida_e_incluida_por_seguranca(self):
+        """Mesma política fail-open de `filter_records_by_date_from`: sem uma
+        data confirmada anterior ao corte, não há motivo para excluir."""
+        rows = [
+            _registro("CLÃ 1", "Ana", 30, 30, None),
+            _registro("CLÃ 2", "Bruno", 30, 30, "data-invalida"),
+        ]
+        por_clan, por_coach = sum_registros_pontos_from_date(rows, self.CORTE)
+        assert por_clan == {
+            "CLÃ 1": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30},
+            "CLÃ 2": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30},
+        }
+
+
+class TestBuildTotaisRecalculoPlan:
+    """Une a soma não-destrutiva (`sum_registros_pontos_from_date`) com a
+    fatia de desafios (já calculada ao vivo, fora de escopo aqui) e os totais
+    hoje persistidos, para o relatório antes/depois de
+    `admin/recalcular_totais_data_inicio.py`. Pura — não lê nem escreve nada."""
+
+    def test_calcula_delta_contra_o_total_existente(self):
+        por_tipo = {"CLÃ 1": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30}}
+        desafio = {"CLÃ 1": 100}
+        existing = {"CLÃ 1": {"total_pontos": 200, "pessoas_em_espera": 2}}
+        plan = build_totais_recalculo_plan(por_tipo, desafio, existing)
+        assert plan == {
+            "CLÃ 1": {
+                "antigo": 200, "novo": 130, "delta": -70,
+                "total_pagante": 30, "total_pro_bono": 0, "pessoas_em_espera": 2,
+            }
+        }
+
+    def test_nome_so_em_desafios_ainda_aparece_no_plano(self):
+        plan = build_totais_recalculo_plan({}, {"CLÃ 2": 50}, {})
+        assert plan == {
+            "CLÃ 2": {
+                "antigo": 0, "novo": 50, "delta": 50,
+                "total_pagante": 0, "total_pro_bono": 0, "pessoas_em_espera": 0,
+            }
+        }
+
+    def test_nome_so_em_existing_sem_nenhuma_contribuicao_nova_zera(self):
+        existing = {"CLÃ 3": {"total_pontos": 90, "pessoas_em_espera": 0}}
+        plan = build_totais_recalculo_plan({}, {}, existing)
+        assert plan == {
+            "CLÃ 3": {
+                "antigo": 90, "novo": 0, "delta": -90,
+                "total_pagante": 0, "total_pro_bono": 0, "pessoas_em_espera": 0,
+            }
+        }
+
+    def test_sem_mudanca_delta_e_zero(self):
+        por_tipo = {"CLÃ 1": {"total_pagante": 30, "total_pro_bono": 0, "total_pontos": 30}}
+        existing = {"CLÃ 1": {"total_pontos": 30, "pessoas_em_espera": 0}}
+        plan = build_totais_recalculo_plan(por_tipo, {}, existing)
+        assert plan["CLÃ 1"]["delta"] == 0

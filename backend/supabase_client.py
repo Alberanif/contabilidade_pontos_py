@@ -101,6 +101,37 @@ def count_registros(
     return result.count or 0
 
 
+def fetch_all_registros_contabilizados() -> list[dict]:
+    """Retorna todas as linhas de `pontos_ultimate_registros_contabilizados`,
+    paginando até o fim — nunca trunca, diferente de `list_registros`
+    (auditoria paginada, `limit` padrão de 100). Base de leitura da correção
+    retroativa não-destrutiva de totais (`admin/recalcular_totais_data_inicio.py`
+    + `points_engine.sum_registros_pontos_from_date`); não apaga nem altera
+    nada."""
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table(TABLE_REGISTROS)
+            .select("*")
+            .order("id", desc=False)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            break
+        all_rows.extend(rows)
+        # Avança pelo que de fato veio, nunca para só porque a página veio
+        # curta: isso pode ser o limite do PostgREST (db-max-rows), não o fim
+        # da tabela — só uma página vazia sinaliza o fim (mesma lógica de
+        # `fetch_active_counted_desafio_submissions`).
+        offset += len(rows)
+    return all_rows
+
+
 def get_registro_by_id(registro_id: int) -> dict | None:
     """Busca um registro pelo ID."""
     client = _get_client()

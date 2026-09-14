@@ -108,8 +108,9 @@ class TestProcessProBonoMergesCoach:
 
     def test_dois_alias_do_mesmo_coach_somam(self):
         # COL_CLAN=0, COL_COACH=1, COL_DATE_PRO_BONO=9, COL_PRO_BONO_KEY=10
-        row_a = ["1", "Vini Marini", "", "", "", "", "", "", "", "01/03/2026", "keyA"]
-        row_b = ["1", "Vinicius Marini", "", "", "", "", "", "", "", "01/03/2026", "keyB"]
+        # Datas a partir de config.DATA_INICIO_CONTABILIZACAO (01/08/2026).
+        row_a = ["1", "Vini Marini", "", "", "", "", "", "", "", "01/08/2026", "keyA"]
+        row_b = ["1", "Vinicius Marini", "", "", "", "", "", "", "", "01/08/2026", "keyB"]
 
         with patch("google_sheets_client.fetch_records_pro_bono",
                    return_value=[[f"col_{i}" for i in range(11)], row_a, row_b]), \

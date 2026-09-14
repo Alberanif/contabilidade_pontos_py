@@ -212,6 +212,51 @@ def filter_records_by_date_from(
     return result
 
 
+def sum_registros_pontos_from_date(
+    registros: list[dict], start_date: date
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+    """Soma `pontos`/`pontos_coach` de linhas já gravadas em
+    `pontos_ultimate_registros_contabilizados`, filtrando por
+    `data_registro >= start_date` (formato ISO `YYYY-MM-DD`, como devolvido
+    pelo PostgREST) — sem ler nem modificar nada além da lista recebida.
+
+    Separa cada soma em pagante (`modalidade != "Pro-bono"`, cobre Coaching
+    Individual e Grupo/Empresa) e pro-bono (`modalidade == "Pro-bono"`).
+    Comportamento fail-open, igual a `filter_records_by_date_from`: uma data
+    ausente ou em formato inesperado é incluída, não excluída.
+
+    Retorna `(por_clan, por_coach)`; cada um mapeia nome ->
+    `{"total_pagante": int, "total_pro_bono": int, "total_pontos": int}`.
+    Nomes sem nenhuma contribuição elegível simplesmente não aparecem.
+    """
+
+    def _elegivel(raw_data: object) -> bool:
+        if not raw_data:
+            return True
+        try:
+            return date.fromisoformat(str(raw_data)) >= start_date
+        except ValueError:
+            return True
+
+    def _acumular(totais: dict[str, dict[str, int]], nome: str, pontos: int, eh_pro_bono: bool) -> None:
+        if not nome:
+            return
+        entry = totais.setdefault(nome, {"total_pagante": 0, "total_pro_bono": 0, "total_pontos": 0})
+        chave = "total_pro_bono" if eh_pro_bono else "total_pagante"
+        entry[chave] += pontos
+        entry["total_pontos"] += pontos
+
+    por_clan: dict[str, dict[str, int]] = {}
+    por_coach: dict[str, dict[str, int]] = {}
+    for row in registros:
+        if not _elegivel(row.get("data_registro")):
+            continue
+        eh_pro_bono = row.get("modalidade") == "Pro-bono"
+        _acumular(por_clan, row.get("clan") or "", row.get("pontos") or 0, eh_pro_bono)
+        _acumular(por_coach, row.get("coach") or "", row.get("pontos_coach") or 0, eh_pro_bono)
+    return por_clan, por_coach
+
+
 def calculate_desafio_pontos(campos: list[dict], valores: dict) -> int:
     """Soma os valores dos campos do tipo 'pontuacao'.
 
@@ -286,3 +331,39 @@ def diff_desafio_registros(
         "to_update": to_update,
         "clan_deltas": clan_deltas,
     }
+
+
+def build_totais_recalculo_plan(
+    por_tipo: dict[str, dict[str, int]],
+    desafio_totais: dict[str, int],
+    existing_rows: dict[str, dict],
+) -> dict[str, dict[str, int]]:
+    """Une, por nome (clã ou coach — a função é a mesma para os dois eixos),
+    a soma não-destrutiva de `sum_registros_pontos_from_date` (`por_tipo`),
+    a fatia de desafios já calculada ao vivo (`desafio_totais`, fora de
+    escopo aqui — nunca alterada) e o total hoje persistido
+    (`existing_rows`), para o relatório antes/depois de
+    `admin/recalcular_totais_data_inicio.py`. Pura — não lê nem escreve nada.
+
+    Retorna nome -> `{"antigo", "novo", "delta", "total_pagante",
+    "total_pro_bono", "pessoas_em_espera"}`. `pessoas_em_espera` é só
+    repassado do total existente (carry-over de lote, não recalculado aqui).
+    """
+    nomes = set(por_tipo) | set(desafio_totais) | set(existing_rows)
+    plan: dict[str, dict[str, int]] = {}
+    for nome in nomes:
+        contrib = por_tipo.get(nome, {})
+        total_pagante = contrib.get("total_pagante", 0)
+        total_pro_bono = contrib.get("total_pro_bono", 0)
+        novo = total_pagante + total_pro_bono + desafio_totais.get(nome, 0)
+        existing = existing_rows.get(nome, {})
+        antigo = existing.get("total_pontos", 0)
+        plan[nome] = {
+            "antigo": antigo,
+            "novo": novo,
+            "delta": novo - antigo,
+            "total_pagante": total_pagante,
+            "total_pro_bono": total_pro_bono,
+            "pessoas_em_espera": existing.get("pessoas_em_espera", 0),
+        }
+    return plan

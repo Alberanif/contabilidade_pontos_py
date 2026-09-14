@@ -369,6 +369,8 @@ class TestCriteriosDeAceitacaoPRD11:
              patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=active_tokens), \
              patch("supabase_client.list_coach_totals", return_value=coach_totals_before), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"TOK-BRUNO-1": {"status": "aprovado"}}), \
              patch("supabase_client.upsert_coach_total",
                    side_effect=lambda *a, **kw: upserts.append((a, kw))):
             resp = client.post("/api/contabilidade/executar")
@@ -381,6 +383,8 @@ class TestCriteriosDeAceitacaoPRD11:
         bruno = [(a, kw) for a, kw in upserts if a[0] == "Bruno Costa"]
         assert bruno, f"refresh não reescreveu o total do coach: {upserts!r}"
         args, kwargs = bruno[-1]
-        assert args[1] == 10  # total_pontos = 0 pagante + 0 pro-bono + 10 desafio
+        # total_pontos = 0 pagante + 0 pro-bono + 100 desafio (submissão pós-corte,
+        # conta porque foi aprovada manualmente — ver TOK-BRUNO-1 acima).
+        assert args[1] == 100
         assert kwargs["total_pagante"] == 0
         assert kwargs["total_pro_bono"] == 0

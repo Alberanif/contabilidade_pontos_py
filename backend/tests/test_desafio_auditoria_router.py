@@ -305,6 +305,51 @@ class TestListarSubmissoesDoDesafio:
             client.get("/api/desafios/1/submissoes")
         mock_list.assert_called_once_with(desafio_id=1, clan=None, status=None, limit=100, offset=0)
 
+    def test_points_reflete_pontos_individuais_do_coach_nao_o_gravado(self):
+        """`_submission()` tem `points: 10` gravado (taxa de clã) e
+        `submitted_at` pós-corte sem revisão registrada — a resposta deve
+        mostrar 0 (pendente, ainda não conta para o coach), não o 10 gravado."""
+        with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}), \
+             patch("supabase_client.list_desafio_submissions_current", return_value=[_submission()]):
+            response = client.get("/api/desafios/1/submissoes")
+        assert response.status_code == 200
+        assert response.json()[0]["points"] == 0
+
+    def test_points_pos_corte_com_revisao_aprovada_mostra_valor_do_coach(self):
+        with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"TOK-1": {"status": "aprovado"}}), \
+             patch("supabase_client.list_desafio_submissions_current", return_value=[_submission()]):
+            response = client.get("/api/desafios/1/submissoes")
+        assert response.status_code == 200
+        assert response.json()[0]["points"] == 100
+
+    def test_points_pre_corte_conta_automaticamente(self):
+        with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}), \
+             patch("supabase_client.list_desafio_submissions_current",
+                   return_value=[_submission(submitted_at="2026-07-31T10:00:00-03:00")]):
+            response = client.get("/api/desafios/1/submissoes")
+        assert response.status_code == 200
+        assert response.json()[0]["points"] == 100
+
+    def test_points_status_nao_active_counted_e_sempre_zero(self):
+        with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"TOK-1": {"status": "aprovado"}}), \
+             patch("supabase_client.list_desafio_submissions_current",
+                   return_value=[_submission(
+                       submitted_at="2026-07-31T10:00:00-03:00", status="inactive_missing"
+                   )]):
+            response = client.get("/api/desafios/1/submissoes")
+        assert response.status_code == 200
+        assert response.json()[0]["points"] == 0
+
 
 # --- GET /api/desafios/submissoes/{token} ---
 
@@ -343,6 +388,26 @@ class TestObterSubmissao:
             response = client.get("/api/desafios/submissoes/TOK-1")
         assert response.status_code == 200
         assert response.json()["coach"] is None
+
+    def test_obter_submissao_points_reflete_pontos_individuais_do_coach(self):
+        with patch(
+            "supabase_client.get_desafio_submission_current", return_value=_submission()
+        ), patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
+            response = client.get("/api/desafios/submissoes/TOK-1")
+        assert response.status_code == 200
+        # _submission() é pós-corte (19/08/2026) sem revisão registrada: pendente.
+        assert response.json()["points"] == 0
+
+    def test_obter_submissao_points_com_revisao_aprovada(self):
+        with patch(
+            "supabase_client.get_desafio_submission_current", return_value=_submission()
+        ), patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"TOK-1": {"status": "aprovado"}}):
+            response = client.get("/api/desafios/submissoes/TOK-1")
+        assert response.status_code == 200
+        assert response.json()["points"] == 100
 
 
 # --- GET /api/desafios/submissoes/{token}/versoes ---
@@ -483,10 +548,14 @@ def test_get_desafio_coach_totals_agrupa_por_canonico(monkeypatch):
         def execute(self):
             return SimpleNamespace(data=self._data)
 
+    # Datas anteriores ao corte (config.DESAFIO_PERCENTUAL_CLAN_CORTE):
+    # contam automaticamente, sem exigir revisão manual. `points: 10` fica de
+    # propósito divergente do valor esperado (100) para provar que o total
+    # vem de config.POINTS_PER_DESAFIO_SUBMISSION_COACH, não do campo gravado.
     rows = [
-        {"raw_name": "Ana", "points": 10},
-        {"raw_name": "ana", "points": 10},
-        {"raw_name": "", "points": 10},
+        {"token": "T1", "raw_name": "Ana", "points": 10, "submitted_at": "2026-05-10T13:00:00-03:00"},
+        {"token": "T2", "raw_name": "ana", "points": 10, "submitted_at": "2026-05-11T13:00:00-03:00"},
+        {"token": "T3", "raw_name": "", "points": 10, "submitted_at": "2026-05-12T13:00:00-03:00"},
     ]
     monkeypatch.setattr(
         supabase_client,
@@ -494,4 +563,39 @@ def test_get_desafio_coach_totals_agrupa_por_canonico(monkeypatch):
         lambda: SimpleNamespace(table=lambda _t: _Chain(rows)),
     )
     monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {"ana": "Ana"})
-    assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 20}
+    monkeypatch.setattr(supabase_client, "list_submissoes_revisoes", lambda *a, **k: {})
+    assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 200}
+
+
+def test_get_desafio_coach_totals_pos_corte_exige_revisao_aprovada(monkeypatch):
+    import supabase_client
+
+    class _Chain:
+        def __init__(self, data):
+            self._data = data
+
+        def select(self, *_):
+            return self
+
+        def eq(self, *_):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=self._data)
+
+    rows = [{"token": "T1", "raw_name": "Ana", "points": 10, "submitted_at": "2026-08-01T13:00:00-03:00"}]
+    monkeypatch.setattr(
+        supabase_client,
+        "_get_client",
+        lambda: SimpleNamespace(table=lambda _t: _Chain(rows)),
+    )
+    monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
+
+    monkeypatch.setattr(supabase_client, "list_submissoes_revisoes", lambda *a, **k: {})
+    assert supabase_client.get_desafio_coach_totals(7) == {}
+
+    monkeypatch.setattr(
+        supabase_client, "list_submissoes_revisoes",
+        lambda *a, **k: {"T1": {"status": "aprovado"}},
+    )
+    assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 100}

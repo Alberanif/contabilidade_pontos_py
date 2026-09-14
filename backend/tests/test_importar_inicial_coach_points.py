@@ -47,13 +47,15 @@ class TestGroupRecordAlwaysPendente:
 
         return inserted
 
-    def test_pre_april_group_gets_status_coach_pendente(self):
-        inserted = self._run("15/03/2026")
+    def test_group_record_early_in_window_gets_status_coach_pendente(self):
+        # Datas a partir de config.DATA_INICIO_CONTABILIZACAO (01/08/2026) —
+        # antes disso o registro nem é inserido (ver test_data_inicio_contabilizacao.py).
+        inserted = self._run("05/08/2026")
         assert len(inserted) == 1
         assert inserted[0]["status_coach"] == "pendente"
 
-    def test_post_april_group_gets_status_coach_pendente(self):
-        inserted = self._run("15/04/2026")
+    def test_group_record_later_in_window_gets_status_coach_pendente(self):
+        inserted = self._run("15/09/2026")
         assert len(inserted) == 1
         assert inserted[0]["status_coach"] == "pendente"
 

@@ -359,7 +359,14 @@ class TestGetTipoCoachTotalsDesafiosLeDosTokens:
     """Fase 2: get_tipo_coach_totals('desafios') e get_period_desafio_coach_totals
     agregam os tokens active_counted de desafio_submissions_current por coach
     canônico (coluna B / raw_name), e nunca tocam a tabela legada
-    desafio_registros_coach."""
+    desafio_registros_coach.
+
+    As datas de `_rows()` são todas anteriores a `config.DESAFIO_PERCENTUAL_CLAN_CORTE`
+    (01/08/2026), então contam automaticamente sem exigir revisão manual — ver
+    `TestPontosIndividuaisCoachValorEGateDeCorte` para o comportamento a partir
+    do corte. O valor por token vem de `config.POINTS_PER_DESAFIO_SUBMISSION_COACH`
+    (100), não do campo `points` gravado (aqui deliberadamente 10, para provar
+    que não é mais essa a fonte)."""
 
     def _rows(self):
         return [
@@ -377,16 +384,18 @@ class TestGetTipoCoachTotalsDesafiosLeDosTokens:
         with patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=self._rows()), \
              patch("supabase_client.get_coach_alias_map",
-                   return_value={"ana albertim": "Ana Albertim"}):
+                   return_value={"ana albertim": "Ana Albertim"}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
             result = supabase_client.get_tipo_coach_totals("desafios")
-        assert result == {"Ana Albertim": 20, "Bruno Costa": 10}
+        assert result == {"Ana Albertim": 200, "Bruno Costa": 100}
 
     def test_raw_name_vazio_e_ignorado(self):
         with patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=[{"token": "X", "raw_name": "   ", "points": 10,
                                   "status": "active_counted",
                                   "submitted_at": "2026-05-10T13:00:00-03:00"}]), \
-             patch("supabase_client.get_coach_alias_map", return_value={}):
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
             assert supabase_client.get_tipo_coach_totals("desafios") == {}
 
     def test_com_data_delega_e_filtra_por_submitted_at_local(self):
@@ -394,28 +403,82 @@ class TestGetTipoCoachTotalsDesafiosLeDosTokens:
         with patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=self._rows()), \
              patch("supabase_client.get_coach_alias_map",
-                   return_value={"ana albertim": "Ana Albertim"}):
+                   return_value={"ana albertim": "Ana Albertim"}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
             result = supabase_client.get_tipo_coach_totals(
                 "desafios", date(2026, 5, 1), date(2026, 5, 31)
             )
-        assert result == {"Ana Albertim": 20}
+        assert result == {"Ana Albertim": 200}
 
     def test_periodo_sem_fim_conta_tudo_a_partir_do_inicio(self):
         from datetime import date
         with patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=self._rows()), \
              patch("supabase_client.get_coach_alias_map",
-                   return_value={"ana albertim": "Ana Albertim"}):
+                   return_value={"ana albertim": "Ana Albertim"}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
             result = supabase_client.get_period_desafio_coach_totals(date(2026, 6, 1), None)
-        assert result == {"Bruno Costa": 10}
+        assert result == {"Bruno Costa": 100}
 
     def test_nunca_consulta_desafio_registros_coach(self):
         with patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=self._rows()), \
              patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}), \
              patch("supabase_client._get_client",
                    side_effect=AssertionError("não deve tocar o banco legado")):
             supabase_client.get_tipo_coach_totals("desafios")
+
+
+class TestPontosIndividuaisCoachValorEGateDeCorte:
+    """Pontos individuais do coach por desafio: valor fixo de
+    `config.POINTS_PER_DESAFIO_SUBMISSION_COACH` (não o `points` gravado, que
+    continua só alimentando o lado clã) e, a partir do corte de vigência
+    (`config.DESAFIO_PERCENTUAL_CLAN_CORTE`), exige também revisão manual
+    aprovada na plataforma — mesma regra que `get_desafio_apuracao` já aplica
+    do lado clã."""
+
+    def _row(self, submitted_at, token="T1"):
+        return {"token": token, "raw_name": "Ana", "points": 10,
+                "status": "active_counted", "submitted_at": submitted_at}
+
+    def test_pre_corte_conta_automaticamente_sem_revisao(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=[self._row("2026-07-31T13:00:00-03:00")]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
+            assert supabase_client.get_tipo_coach_totals("desafios") == {"Ana": 100}
+
+    def test_pos_corte_sem_registro_de_revisao_nao_conta(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=[self._row("2026-08-01T13:00:00-03:00")]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes", return_value={}):
+            assert supabase_client.get_tipo_coach_totals("desafios") == {}
+
+    def test_pos_corte_com_revisao_pendente_nao_conta(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=[self._row("2026-08-01T13:00:00-03:00")]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"T1": {"status": "pendente"}}):
+            assert supabase_client.get_tipo_coach_totals("desafios") == {}
+
+    def test_pos_corte_com_revisao_reprovada_nao_conta(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=[self._row("2026-08-01T13:00:00-03:00")]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"T1": {"status": "reprovado"}}):
+            assert supabase_client.get_tipo_coach_totals("desafios") == {}
+
+    def test_pos_corte_com_revisao_aprovada_conta(self):
+        with patch("supabase_client.fetch_active_counted_desafio_submissions",
+                   return_value=[self._row("2026-08-01T13:00:00-03:00")]), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"T1": {"status": "aprovado"}}):
+            assert supabase_client.get_tipo_coach_totals("desafios") == {"Ana": 100}
 
 
 class TestGetAllDesafioTokenCoachNames:

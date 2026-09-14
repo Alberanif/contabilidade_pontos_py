@@ -99,6 +99,9 @@ def _process_pro_bono_records(
     new_records = points_engine.find_new_records(
         data_rows, KEY_COLUMNS_PRO_BONO, processed_hashes, hash_prefix=HASH_PREFIX_PRO_BONO
     )
+    new_records = points_engine.filter_records_by_date_from(
+        new_records, config.COL_DATE_PRO_BONO, config.DATA_INICIO_CONTABILIZACAO
+    )
 
     for record_hash, row in new_records:
         _build_and_insert_pro_bono(
@@ -134,6 +137,9 @@ def _process_group_records(
         data_rows, COL_MODALIDADE, GROUP_MODALIDADES
     )
     new_records = points_engine.find_new_records(group_rows, KEY_COLUMNS, processed_hashes)
+    new_records = points_engine.filter_records_by_date_from(
+        new_records, config.COL_DATE_PAYING, config.DATA_INICIO_CONTABILIZACAO
+    )
 
     for record_hash, row in new_records:
         raw_participantes = row[COL_PARTICIPANTES].strip() if COL_PARTICIPANTES < len(row) else ""
@@ -871,6 +877,9 @@ def executar_contabilidade():
         )
         processed_hashes = supabase_client.get_processed_hashes()
         new_records = points_engine.find_new_records(coaching_rows, KEY_COLUMNS, processed_hashes)
+        new_records = points_engine.filter_records_by_date_from(
+            new_records, config.COL_DATE_PAYING, config.DATA_INICIO_CONTABILIZACAO
+        )
 
         for record_hash, row in new_records:
             _build_and_insert(
@@ -1035,6 +1044,9 @@ def reprocessar_contabilidade():
             (points_engine.compute_record_hash(row, KEY_COLUMNS), row)
             for row in coaching_rows
         ]
+        new_records = points_engine.filter_records_by_date_from(
+            new_records, config.COL_DATE_PAYING, config.DATA_INICIO_CONTABILIZACAO
+        )
         for record_hash, row in new_records:
             _build_and_insert(
                 record_hash, row, header, data_rows,

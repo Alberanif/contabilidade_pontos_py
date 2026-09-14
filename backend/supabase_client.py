@@ -101,6 +101,37 @@ def count_registros(
     return result.count or 0
 
 
+def fetch_all_registros_contabilizados() -> list[dict]:
+    """Retorna todas as linhas de `pontos_ultimate_registros_contabilizados`,
+    paginando até o fim — nunca trunca, diferente de `list_registros`
+    (auditoria paginada, `limit` padrão de 100). Base de leitura da correção
+    retroativa não-destrutiva de totais (`admin/recalcular_totais_data_inicio.py`
+    + `points_engine.sum_registros_pontos_from_date`); não apaga nem altera
+    nada."""
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table(TABLE_REGISTROS)
+            .select("*")
+            .order("id", desc=False)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            break
+        all_rows.extend(rows)
+        # Avança pelo que de fato veio, nunca para só porque a página veio
+        # curta: isso pode ser o limite do PostgREST (db-max-rows), não o fim
+        # da tabela — só uma página vazia sinaliza o fim (mesma lógica de
+        # `fetch_active_counted_desafio_submissions`).
+        offset += len(rows)
+    return all_rows
+
+
 def get_registro_by_id(registro_id: int) -> dict | None:
     """Busca um registro pelo ID."""
     client = _get_client()
@@ -538,25 +569,61 @@ def get_all_desafio_token_coach_names() -> set[str]:
     }
 
 
+def _submissao_conta_para_pontos_individuais_coach(
+    submitted_at, revisao_status: str
+) -> bool:
+    """Mesma regra de corte usada por `get_desafio_apuracao` no eixo clã
+    (`config.DESAFIO_PERCENTUAL_CLAN_CORTE`): antes do corte, `active_counted`
+    já basta; a partir do corte, também exige revisão manual aprovada na
+    plataforma."""
+    sub_date = _submitted_at_local_date(submitted_at)
+    if sub_date and sub_date >= config.DESAFIO_PERCENTUAL_CLAN_CORTE:
+        return revisao_status == "aprovado"
+    return True
+
+
+def desafio_submission_pontos_individuais_coach(
+    status: str, submitted_at, revisao_status: str
+) -> int:
+    """Pontos individuais do coach para uma linha de auditoria de submissão
+    (`GET /api/desafios/submissoes/{token}`, `GET /api/desafios/{id}/submissoes`)
+    — não o `points` gravado na linha, que é a taxa de clã. Mesma elegibilidade
+    de `_aggregate_desafio_tokens_by_coach`/`get_desafio_coach_totals`: exige
+    `status == "active_counted"` e `_submissao_conta_para_pontos_individuais_coach`."""
+    if status != "active_counted":
+        return 0
+    if not _submissao_conta_para_pontos_individuais_coach(submitted_at, revisao_status):
+        return 0
+    return config.POINTS_PER_DESAFIO_SUBMISSION_COACH
+
+
 def _aggregate_desafio_tokens_by_coach(
     rows: list[dict], inicio: "date | None" = None, fim: "date | None" = None
 ) -> dict[str, int]:
-    """Agrupa `points` de tokens de desafio pelo coach canônico (coluna B
-    resolvida via `pontos_ultimate_coach_aliases`). Quando `inicio` é dado,
+    """Agrupa os pontos individuais de tokens de desafio pelo coach canônico
+    (coluna B resolvida via `pontos_ultimate_coach_aliases`). Cada token
+    elegível vale `config.POINTS_PER_DESAFIO_SUBMISSION_COACH` — não o campo
+    `points` gravado, que é a taxa de clã e pode divergir. Elegibilidade segue
+    `_submissao_conta_para_pontos_individuais_coach`. Quando `inicio` é dado,
     inclui só os tokens cuja data local (São Paulo) de `submitted_at` cai em
     `[inicio, fim]` (`fim=None` = sem limite superior)."""
+    revisoes_map = list_submissoes_revisoes()
     raw: dict[str, int] = {}
     for row in rows:
         name = (row.get("raw_name") or "").strip()
         if not name:
             continue
+        submitted_at = row.get("submitted_at")
         if inicio is not None:
-            local_date = _submitted_at_local_date(row.get("submitted_at"))
+            local_date = _submitted_at_local_date(submitted_at)
             if local_date is None or local_date < inicio:
                 continue
             if fim is not None and local_date > fim:
                 continue
-        raw[name] = raw.get(name, 0) + (row.get("points") or 0)
+        revisao_status = revisoes_map.get(row.get("token"), {}).get("status", "pendente")
+        if not _submissao_conta_para_pontos_individuais_coach(submitted_at, revisao_status):
+            continue
+        raw[name] = raw.get(name, 0) + config.POINTS_PER_DESAFIO_SUBMISSION_COACH
     return coach_identity.aggregate_by_canonical(raw, get_coach_alias_map())
 
 
@@ -787,24 +854,29 @@ def get_desafio_clan_totals(desafio_id: int) -> dict[str, int]:
 
 
 def get_desafio_coach_totals(desafio_id: int) -> dict[str, int]:
-    """Soma os pontos das submissões `active_counted` de um desafio, agrupadas
-    pelo coach canônico (coluna B / `raw_name` resolvida via
-    `pontos_ultimate_coach_aliases`). Espelha `get_desafio_clan_totals` no eixo
-    coach (Fase 2)."""
+    """Soma os pontos individuais das submissões `active_counted` de um
+    desafio, agrupadas pelo coach canônico (coluna B / `raw_name` resolvida
+    via `pontos_ultimate_coach_aliases`). Cada token elegível vale
+    `config.POINTS_PER_DESAFIO_SUBMISSION_COACH` — ver
+    `_submissao_conta_para_pontos_individuais_coach` para a regra de corte."""
     client = _get_client()
     result = (
         client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
-        .select("raw_name, points")
+        .select("raw_name, token, submitted_at")
         .eq("desafio_id", desafio_id)
         .eq("status", "active_counted")
         .execute()
     )
+    revisoes_map = list_submissoes_revisoes()
     raw: dict[str, int] = {}
     for row in result.data:
         name = (row.get("raw_name") or "").strip()
         if not name:
             continue
-        raw[name] = raw.get(name, 0) + (row.get("points") or 0)
+        revisao_status = revisoes_map.get(row.get("token"), {}).get("status", "pendente")
+        if not _submissao_conta_para_pontos_individuais_coach(row.get("submitted_at"), revisao_status):
+            continue
+        raw[name] = raw.get(name, 0) + config.POINTS_PER_DESAFIO_SUBMISSION_COACH
     return coach_identity.aggregate_by_canonical(raw, get_coach_alias_map())
 
 

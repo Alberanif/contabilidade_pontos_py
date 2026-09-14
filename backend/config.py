@@ -43,6 +43,15 @@ POINTS_PER_DESAFIO_SUBMISSION = int(
     os.getenv("POINTS_PER_DESAFIO_SUBMISSION", "10")
 )
 
+# Pontuação individual do coach por desafio — separada do valor de clã acima
+# (que continua alimentando só o crédito contínuo por token do clã). A partir
+# do corte de vigência (DESAFIO_PERCENTUAL_CLAN_CORTE, definido abaixo), exige
+# também aprovação manual na plataforma (revisao_status == "aprovado"),
+# espelhando a mesma regra que a apuração por percentual do clã já aplica.
+POINTS_PER_DESAFIO_SUBMISSION_COACH = int(
+    os.getenv("POINTS_PER_DESAFIO_SUBMISSION_COACH", "100")
+)
+
 # Planilha de Registros Pro-bono (opcional — não interrompe startup se ausente)
 GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID = os.getenv("GSHEET_RECORDS_PRO_BONO_SPREADSHEET_ID")
 GSHEET_RECORDS_PRO_BONO_SHEET_NAME = os.getenv("GSHEET_RECORDS_PRO_BONO_SHEET_NAME")
@@ -80,6 +89,14 @@ BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
 # Ranking de coaches — apenas registros a partir desta data contam para pontuação individual
 COL_DATE_PAYING   = 10  # Coluna K (índice 10) — data na planilha de clientes pagantes
 COL_DATE_PRO_BONO = 9   # Coluna J (índice 9)  — data na planilha de pro-bono
+
+# Data de início da contabilização — nenhum registro anterior a esta data conta
+# para pontos, em nenhuma fonte (Coaching Individual, Coaching em Grupo/Empresa,
+# Pro-bono). Aplicada em /executar e /reprocessar via
+# points_engine.filter_records_by_date_from, antes de inserir/contar qualquer
+# registro. Separada de DESAFIO_PERCENTUAL_CLAN_CORTE (abaixo) — mesmo valor
+# hoje, mas são regras independentes que podem divergir no futuro.
+DATA_INICIO_CONTABILIZACAO = date(2026, 8, 1)
 
 # Groq LLM Agent (opcional)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")

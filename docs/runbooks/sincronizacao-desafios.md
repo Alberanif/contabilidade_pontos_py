@@ -35,6 +35,9 @@ Desde 14/09/2026, toda submissão pós-corte conta automaticamente para pontos
 **reprovar** uma submissão (ou desfazer uma reprovação) em "Desafios" — ver
 `docs/superpowers/specs/2026-09-14-desafios-aprovacao-automatica-design.md`.
 
+Para reaplicar a regra nova a desafios já apurados (backfill), ver
+`backend/admin/backfill_desafio_apuracao_automatica.py` (dry-run por padrão).
+
 Diferente da planilha de Registros (`fetch_records`, escopo
 `spreadsheets` de leitura/escrita compartilhado com outras rotinas), a leitura
 de desafios usa um escopo dedicado

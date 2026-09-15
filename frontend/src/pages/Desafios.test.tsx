@@ -599,4 +599,40 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     expect(revisarSubmissao).toHaveBeenCalledWith("tok-abc123", "pendente");
     expect(await screen.findByText("VÁLIDO")).toBeInTheDocument();
   });
+
+  it("reproves a submission optimistically, without reloading the whole submissions table or blocking further clicks", async () => {
+    const submissaoA = buildSubmissao({ token: "tok-a", coach: "Coach A" });
+    const submissaoB = buildSubmissao({ token: "tok-b", coach: "Coach B" });
+    vi.mocked(fetchSubmissoesDoDesafio).mockReset().mockResolvedValue([submissaoA, submissaoB]);
+
+    let resolveRevisar: (value: { token: string; status: string }) => void = () => {};
+    vi.mocked(revisarSubmissao)
+      .mockReset()
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRevisar = resolve;
+          })
+      );
+
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await user.click(await screen.findByText("Semana de Treinos"));
+    await screen.findByText("tok-a");
+
+    const chamadasAntes = vi.mocked(fetchSubmissoesDoDesafio).mock.calls.length;
+
+    await user.click(screen.getAllByTitle("Reprovar submissão")[0]);
+
+    // Feedback imediato (otimista), sem esperar a resposta do servidor nem
+    // recarregar a tabela inteira (nada de "Carregando submissões...", e a
+    // segunda submissão continua visível o tempo todo).
+    expect(await screen.findByText("REPROVADO")).toBeInTheDocument();
+    expect(screen.queryByText(/carregando submiss/i)).not.toBeInTheDocument();
+    expect(screen.getByText("tok-b")).toBeInTheDocument();
+    expect(fetchSubmissoesDoDesafio).toHaveBeenCalledTimes(chamadasAntes);
+
+    resolveRevisar({ token: "tok-a", status: "reprovado" });
+    await waitFor(() => expect(fetchSubmissoesDoDesafio).toHaveBeenCalledTimes(chamadasAntes));
+  });
 });

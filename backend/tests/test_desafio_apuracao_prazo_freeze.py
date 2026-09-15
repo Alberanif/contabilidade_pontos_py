@@ -57,8 +57,17 @@ def _sub(token, coach, submitted_at, clan="CLÃ 1", desafio_id=DESAFIO_ID):
 
 
 def _run(desafio, submissoes):
+    # `side_effect` (em vez de `return_value`) espelha o contrato real de
+    # `fetch_active_counted_desafio_submissions`: quando chamada com
+    # `desafio_id`, filtra no servidor — `_calcular_apuracao_atual_desafio`
+    # não filtra mais em Python.
+    def _fetch(desafio_id=None):
+        if desafio_id is None:
+            return submissoes
+        return [s for s in submissoes if s.get("desafio_id") == desafio_id]
+
     with patch("supabase_client.get_desafio", return_value=desafio), \
-         patch("supabase_client.fetch_active_counted_desafio_submissions", return_value=submissoes), \
+         patch("supabase_client.fetch_active_counted_desafio_submissions", side_effect=_fetch), \
          patch("supabase_client.list_submissoes_revisoes", return_value={}), \
          patch("supabase_client.get_coach_alias_map", return_value={}), \
          patch("supabase_client.list_coach_clas", return_value=COACH_CLAS):
@@ -149,9 +158,10 @@ class TestSemTruncamentoPorPaginacao:
         assert result["CLÃ 1"].participantes == 150
 
     def test_submissoes_de_outro_desafio_no_mesmo_fetch_nao_contam(self):
-        """`fetch_active_counted_desafio_submissions` não filtra por desafio
-        (usada também pelo eixo coach, entre outros) — o filtro por
-        `desafio_id` precisa acontecer aqui dentro."""
+        """`_calcular_apuracao_atual_desafio` precisa passar `desafio_id` para
+        `fetch_active_counted_desafio_submissions` (que agora filtra no
+        servidor) — sem isso, submissões de outros desafios vazariam para
+        cá."""
         desafio = {"id": DESAFIO_ID, "prazo_apuracao": None}
         submissoes = [
             _sub("T1", "Ana", "2026-08-20T10:00:00+00:00", desafio_id=DESAFIO_ID),

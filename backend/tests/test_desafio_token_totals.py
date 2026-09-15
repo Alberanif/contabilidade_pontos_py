@@ -96,6 +96,22 @@ class TestFetchActiveCountedDesafioSubmissions:
         assert result == rows
         assert ("status", "active_counted") in eq_calls
 
+    def test_filtra_por_desafio_id_no_servidor_quando_informado(self):
+        """`_calcular_apuracao_atual_desafio` chamava esta função sem filtro e
+        descartava as linhas de outros desafios em Python — a cada reprovação
+        manual de um desafio já apurado (`reapurar_desafio_e_aplicar_delta`),
+        isso relia a tabela inteira de todos os desafios ativos, tornando o
+        clique em "reprovar" perceptivelmente lento. Filtrando `desafio_id`
+        no servidor, o fetch fica do tamanho de um desafio, não da tabela
+        inteira."""
+        rows = [_row("CLÃ 1", 10, "2026-05-15T12:00:00+00:00")]
+        client, eq_calls = _single_page_client(rows)
+        with patch.object(supabase_client, "_get_client", return_value=client):
+            result = supabase_client.fetch_active_counted_desafio_submissions(desafio_id=18)
+        assert result == rows
+        assert ("status", "active_counted") in eq_calls
+        assert ("desafio_id", 18) in eq_calls
+
     def test_paginacao_nao_para_em_pagina_curta(self):
         """Página curta pode ser limite do PostgREST (db-max-rows), não fim da
         tabela: parar ali subcontaria um clã com muitos tokens ativos."""

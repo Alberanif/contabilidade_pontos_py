@@ -241,13 +241,29 @@ export default function Desafios() {
   }, [desafioDetalheId]);
 
   const handleToggleReprovacao = async (token: string, reprovarAgora: boolean) => {
+    const novoStatus = reprovarAgora ? "reprovado" : "pendente";
+    const submissoesAnteriores = submissoes;
+    // Atualização otimista: aplica o novo status na hora, sem esperar o
+    // servidor nem recarregar a tabela inteira — evitava um "piscar" da tela
+    // toda (loadingSubmissoes reset) e um delay perceptível a cada reprovação
+    // manual, que travava o fluxo de revisar vários coaches em sequência.
+    setSubmissoes((prev) =>
+      prev.map((s) => (s.token === token ? { ...s, revisao_status: novoStatus } : s))
+    );
     try {
-      await revisarSubmissao(token, reprovarAgora ? "reprovado" : "pendente");
+      const resultado = await revisarSubmissao(token, novoStatus);
+      setSubmissoes((prev) =>
+        prev.map((s) =>
+          s.token === token
+            ? { ...s, revisao_status: resultado.status as DesafioSubmissao["revisao_status"] }
+            : s
+        )
+      );
       if (desafioDetalheId) {
-        carregarSubmissoes(desafioDetalheId);
         carregarApuracao(desafioDetalheId);
       }
     } catch (err) {
+      setSubmissoes(submissoesAnteriores);
       alert(`Erro ao revisar submissão: ${err instanceof Error ? err.message : String(err)}`);
     }
   };

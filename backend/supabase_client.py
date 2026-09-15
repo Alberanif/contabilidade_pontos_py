@@ -437,8 +437,8 @@ def fetch_all_desafio_submissions_current() -> list[dict]:
     return all_rows
 
 
-def fetch_active_counted_desafio_submissions() -> list[dict]:
-    """Retorna todos os tokens com `status='active_counted'`, paginando até o fim.
+def fetch_active_counted_desafio_submissions(desafio_id: int | None = None) -> list[dict]:
+    """Retorna os tokens com `status='active_counted'`, paginando até o fim.
 
     Base de agregação dos totais de clã por tipo `desafios` (`get_period_desafio_totals`,
     `get_tipo_clan_totals('desafios')`). Diferente de `list_desafio_submissions_current`
@@ -448,17 +448,29 @@ def fetch_active_counted_desafio_submissions() -> list[dict]:
     reconciliação, sem filtro), o filtro `status='active_counted'` acontece no
     servidor para não trazer linhas inválidas/conflitantes/inativas que nunca
     entrariam na soma.
+
+    `desafio_id`, quando informado, também filtra no servidor em vez de trazer
+    a tabela inteira (todos os desafios) e descartar o resto em Python. Usada
+    por `_calcular_apuracao_atual_desafio`, que roda a cada reprovação/undo de
+    submissão de um desafio já apurado (`reapurar_desafio_e_aplicar_delta`,
+    chamada pela rota `/submissoes/{token}/revisar`) — sem esse filtro, cada
+    clique relia todas as submissões `active_counted` de todos os desafios,
+    ficando perceptivelmente lento à medida que a tabela cresce.
     """
     client = _get_client()
     all_rows: list[dict] = []
     offset = 0
     page_size = 1000
     while True:
-        result = (
+        query = (
             client.table(TABLE_DESAFIO_SUBMISSIONS_CURRENT)
             .select("*")
             .eq("status", "active_counted")
-            .order("token", desc=False)
+        )
+        if desafio_id is not None:
+            query = query.eq("desafio_id", desafio_id)
+        result = (
+            query.order("token", desc=False)
             .range(offset, offset + page_size - 1)
             .execute()
         )
@@ -1464,12 +1476,11 @@ def _calcular_apuracao_atual_desafio(desafio_id: int) -> dict[str, "ApuracaoClan
     # `limit=100` por padrão) — um desafio com mais de 100 submissões
     # `active_counted` tinha as mais antigas descartadas silenciosamente
     # nessa apuração. `fetch_active_counted_desafio_submissions` pagina até o
-    # fim e não filtra por desafio, então o filtro por `desafio_id` é feito
-    # aqui.
-    submissoes = [
-        s for s in fetch_active_counted_desafio_submissions()
-        if s.get("desafio_id") == desafio_id
-    ]
+    # fim e filtra `desafio_id` no servidor (não em Python) — essencial aqui,
+    # pois esta função roda a cada reprovação manual de um desafio já apurado
+    # (`reapurar_desafio_e_aplicar_delta`, via rota `/revisar`): sem o filtro
+    # no servidor, cada clique relia a tabela inteira de todos os desafios.
+    submissoes = fetch_active_counted_desafio_submissions(desafio_id=desafio_id)
     revisoes_map = list_submissoes_revisoes(desafio_id)
     alias_map = get_coach_alias_map()
 

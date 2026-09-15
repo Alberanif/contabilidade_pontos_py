@@ -1598,3 +1598,46 @@ def _calcular_apuracao_atual_desafio(desafio_id: int) -> dict[str, "ApuracaoClan
         tamanho_grupo_por_clan=tamanho_grupo,
         todos_os_clas=todos_clas,
     )
+
+
+def reapurar_desafio_e_aplicar_delta(desafio_id: int, dry_run: bool = False) -> dict[str, dict]:
+    """Recalcula a apuração por percentual de clã de um desafio a partir do
+    estado *atual* de revisões (`_calcular_apuracao_atual_desafio`) e aplica o
+    delta resultante ao total de cada clã (`pontos_ultimate_totais_por_clan`),
+    regravando o resultado em `desafio_clan_apuracoes`/`desafios.apurado_em`
+    via `salvar_apuracao_clan`.
+
+    Funciona tanto para um desafio ainda não apurado quanto para um já
+    congelado — reabre e refecha a apuração daquele desafio especificamente,
+    sem exigir edição de prazo (chamado por `revisar_submissao`, na API, toda
+    vez que uma submissão de um desafio já apurado é reprovada ou tem a
+    reprovação desfeita) e pelo sweep de prazo vencido
+    (`routers.contabilidade.processar_desafios_apuracao_prazo`).
+
+    `dry_run=True` calcula e retorna o resultado (incluindo o delta por clã)
+    sem gravar nada — usado pelo backfill administrativo para preview.
+
+    Retorna `{}` se o desafio não existir; caso contrário, dict clã ->
+    `ApuracaoClan.to_dict()` acrescido da chave `"delta"` (pontos novos menos
+    pontos gravados anteriormente para aquele clã)."""
+    desafio = get_desafio(desafio_id)
+    if not desafio:
+        return {}
+
+    res_dict = _calcular_apuracao_atual_desafio(desafio_id)
+    apuracoes_anteriores = get_desafio_clan_apuracoes(desafio_id)
+    pontos_antigos = {a["clan"]: a["pontos"] for a in apuracoes_anteriores}
+
+    saida: dict[str, dict] = {}
+    for clan, ap in res_dict.items():
+        delta = ap.pontos - pontos_antigos.get(clan, 0)
+        if delta != 0 and not dry_run:
+            totais = get_clan_totals()
+            atual = totais.get(clan, 0)
+            upsert_clan_total(clan=clan, total=max(0, atual + delta))
+        saida[clan] = {**ap.to_dict(), "delta": delta}
+
+    if not dry_run:
+        salvar_apuracao_clan(desafio_id, res_dict)
+
+    return saida

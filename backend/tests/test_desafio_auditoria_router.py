@@ -305,17 +305,17 @@ class TestListarSubmissoesDoDesafio:
             client.get("/api/desafios/1/submissoes")
         mock_list.assert_called_once_with(desafio_id=1, clan=None, status=None, limit=100, offset=0)
 
-    def test_points_reflete_pontos_individuais_do_coach_nao_o_gravado(self):
+    def test_points_pos_corte_sem_revisao_conta_por_padrao(self):
         """`_submission()` tem `points: 10` gravado (taxa de clã) e
         `submitted_at` pós-corte sem revisão registrada — a resposta deve
-        mostrar 0 (pendente, ainda não conta para o coach), não o 10 gravado."""
+        mostrar 100 (conta por padrão), não o 10 gravado nem 0."""
         with patch("supabase_client.get_desafio", return_value=_desafio()), \
              patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.list_submissoes_revisoes", return_value={}), \
              patch("supabase_client.list_desafio_submissions_current", return_value=[_submission()]):
             response = client.get("/api/desafios/1/submissoes")
         assert response.status_code == 200
-        assert response.json()[0]["points"] == 0
+        assert response.json()[0]["points"] == 100
 
     def test_points_pos_corte_com_revisao_aprovada_mostra_valor_do_coach(self):
         with patch("supabase_client.get_desafio", return_value=_desafio()), \
@@ -326,6 +326,16 @@ class TestListarSubmissoesDoDesafio:
             response = client.get("/api/desafios/1/submissoes")
         assert response.status_code == 200
         assert response.json()[0]["points"] == 100
+
+    def test_points_pos_corte_com_revisao_reprovada_mostra_zero(self):
+        with patch("supabase_client.get_desafio", return_value=_desafio()), \
+             patch("supabase_client.get_coach_alias_map", return_value={}), \
+             patch("supabase_client.list_submissoes_revisoes",
+                   return_value={"TOK-1": {"status": "reprovado"}}), \
+             patch("supabase_client.list_desafio_submissions_current", return_value=[_submission()]):
+            response = client.get("/api/desafios/1/submissoes")
+        assert response.status_code == 200
+        assert response.json()[0]["points"] == 0
 
     def test_points_pre_corte_conta_automaticamente(self):
         with patch("supabase_client.get_desafio", return_value=_desafio()), \
@@ -389,15 +399,15 @@ class TestObterSubmissao:
         assert response.status_code == 200
         assert response.json()["coach"] is None
 
-    def test_obter_submissao_points_reflete_pontos_individuais_do_coach(self):
+    def test_obter_submissao_points_pos_corte_sem_revisao_conta_por_padrao(self):
         with patch(
             "supabase_client.get_desafio_submission_current", return_value=_submission()
         ), patch("supabase_client.get_coach_alias_map", return_value={}), \
              patch("supabase_client.list_submissoes_revisoes", return_value={}):
             response = client.get("/api/desafios/submissoes/TOK-1")
         assert response.status_code == 200
-        # _submission() é pós-corte (19/08/2026) sem revisão registrada: pendente.
-        assert response.json()["points"] == 0
+        # _submission() é pós-corte (19/08/2026) sem revisão registrada: conta por padrão.
+        assert response.json()["points"] == 100
 
     def test_obter_submissao_points_com_revisao_aprovada(self):
         with patch(
@@ -592,10 +602,10 @@ def test_get_desafio_coach_totals_pos_corte_exige_revisao_aprovada(monkeypatch):
     monkeypatch.setattr(supabase_client, "get_coach_alias_map", lambda: {})
 
     monkeypatch.setattr(supabase_client, "list_submissoes_revisoes", lambda *a, **k: {})
-    assert supabase_client.get_desafio_coach_totals(7) == {}
+    assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 100}
 
     monkeypatch.setattr(
         supabase_client, "list_submissoes_revisoes",
-        lambda *a, **k: {"T1": {"status": "aprovado"}},
+        lambda *a, **k: {"T1": {"status": "reprovado"}},
     )
-    assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 100}
+    assert supabase_client.get_desafio_coach_totals(7) == {}

@@ -574,11 +574,12 @@ def _submissao_conta_para_pontos_individuais_coach(
 ) -> bool:
     """Mesma regra de corte usada por `get_desafio_apuracao` no eixo clã
     (`config.DESAFIO_PERCENTUAL_CLAN_CORTE`): antes do corte, `active_counted`
-    já basta; a partir do corte, também exige revisão manual aprovada na
-    plataforma."""
+    já basta. A partir do corte, toda submissão conta por padrão — só
+    `revisao_status == "reprovado"` exclui (não há mais exigência de
+    aprovação manual explícita)."""
     sub_date = _submitted_at_local_date(submitted_at)
     if sub_date and sub_date >= config.DESAFIO_PERCENTUAL_CLAN_CORTE:
-        return revisao_status == "aprovado"
+        return revisao_status != "reprovado"
     return True
 
 

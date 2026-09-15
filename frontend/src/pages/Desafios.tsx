@@ -239,9 +239,9 @@ export default function Desafios() {
     carregarApuracao(desafioDetalheId);
   }, [desafioDetalheId]);
 
-  const handleRevisarSubmissao = async (token: string, newStatus: "aprovado" | "reprovado") => {
+  const handleToggleReprovacao = async (token: string, reprovarAgora: boolean) => {
     try {
-      await revisarSubmissao(token, newStatus);
+      await revisarSubmissao(token, reprovarAgora ? "reprovado" : "pendente");
       if (desafioDetalheId) {
         carregarSubmissoes(desafioDetalheId);
         carregarApuracao(desafioDetalheId);
@@ -651,29 +651,30 @@ export default function Desafios() {
                                   <div className="flex items-center justify-center gap-1.5">
                                     <span
                                       className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                                        revStatus === "aprovado"
-                                          ? "bg-green-100 text-green-700"
-                                          : revStatus === "reprovado"
+                                        revStatus === "reprovado"
                                           ? "bg-red-100 text-red-700"
-                                          : "bg-amber-100 text-amber-700"
+                                          : "bg-green-100 text-green-700"
                                       }`}
                                     >
-                                      {revStatus.toUpperCase()}
+                                      {revStatus === "reprovado" ? "REPROVADO" : "VÁLIDO"}
                                     </span>
-                                    <button
-                                      title="Aprovar submissão"
-                                      onClick={() => handleRevisarSubmissao(s.token, "aprovado")}
-                                      className="p-1 text-xs font-bold bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                                    >
-                                      ✓
-                                    </button>
-                                    <button
-                                      title="Reprovar submissão"
-                                      onClick={() => handleRevisarSubmissao(s.token, "reprovado")}
-                                      className="p-1 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
-                                    >
-                                      ✗
-                                    </button>
+                                    {revStatus === "reprovado" ? (
+                                      <button
+                                        title="Desfazer reprovação"
+                                        onClick={() => handleToggleReprovacao(s.token, false)}
+                                        className="p-1 text-xs font-bold bg-gray-500 hover:bg-gray-600 text-white rounded transition-colors"
+                                      >
+                                        ↶
+                                      </button>
+                                    ) : (
+                                      <button
+                                        title="Reprovar submissão"
+                                        onClick={() => handleToggleReprovacao(s.token, true)}
+                                        className="p-1 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                                      >
+                                        ✗
+                                      </button>
+                                    )}
                                   </div>
                                 ) : (
                                   <span className="text-xs text-gray-400">N/A (Legado)</span>

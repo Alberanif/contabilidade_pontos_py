@@ -10,6 +10,7 @@ import {
   fetchVersoesDaSubmissao,
   fetchSincronizacoes,
   fetchSincronizacao,
+  revisarSubmissao,
   type DesafioAuditoria,
   type DesafioAuditoriaDetalhe,
   type DesafioSubmissao,
@@ -527,5 +528,56 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     expect(screen.queryByText("tok-1")).not.toBeInTheDocument();
     expect(screen.getByText(/mostrando/i)).toBeInTheDocument();
     expect(screen.getByText(/página 2 de 2/i)).toBeInTheDocument();
+  });
+
+  it("shows VÁLIDO by default and REPROVADO after rejecting a post-corte submission, with a single toggle button", async () => {
+    const submissao = buildSubmissao({
+      token: "tok-abc123",
+      submitted_at: "2026-08-05T10:00:00",
+      revisao_status: undefined,
+    });
+    vi.mocked(fetchSubmissoesDoDesafio).mockResolvedValue([submissao]);
+    vi.mocked(revisarSubmissao).mockResolvedValue({ token: "tok-abc123", status: "reprovado" });
+
+    render(<Desafios />);
+    await waitFor(() => expect(fetchDesafiosAuditoria).toHaveBeenCalled());
+    await userEvent.click(await screen.findByText("Semana de Treinos"));
+    await waitFor(() => expect(fetchSubmissoesDoDesafio).toHaveBeenCalled());
+
+    expect(await screen.findByText("VÁLIDO")).toBeInTheDocument();
+    expect(screen.queryByText(/aprovar/i)).not.toBeInTheDocument();
+
+    const reprovarBtn = screen.getByTitle("Reprovar submissão");
+    vi.mocked(fetchSubmissoesDoDesafio).mockResolvedValue([
+      { ...submissao, revisao_status: "reprovado" },
+    ]);
+    await userEvent.click(reprovarBtn);
+
+    expect(revisarSubmissao).toHaveBeenCalledWith("tok-abc123", "reprovado");
+    expect(await screen.findByText("REPROVADO")).toBeInTheDocument();
+  });
+
+  it("undoes a rejection by sending status pendente", async () => {
+    const submissaoReprovada = buildSubmissao({
+      token: "tok-abc123",
+      submitted_at: "2026-08-05T10:00:00",
+      revisao_status: "reprovado",
+    });
+    vi.mocked(fetchSubmissoesDoDesafio).mockResolvedValue([submissaoReprovada]);
+    vi.mocked(revisarSubmissao).mockResolvedValue({ token: "tok-abc123", status: "pendente" });
+
+    render(<Desafios />);
+    await waitFor(() => expect(fetchDesafiosAuditoria).toHaveBeenCalled());
+    await userEvent.click(await screen.findByText("Semana de Treinos"));
+    await waitFor(() => expect(fetchSubmissoesDoDesafio).toHaveBeenCalled());
+
+    const desfazerBtn = await screen.findByTitle("Desfazer reprovação");
+    vi.mocked(fetchSubmissoesDoDesafio).mockResolvedValue([
+      { ...submissaoReprovada, revisao_status: "pendente" },
+    ]);
+    await userEvent.click(desfazerBtn);
+
+    expect(revisarSubmissao).toHaveBeenCalledWith("tok-abc123", "pendente");
+    expect(await screen.findByText("VÁLIDO")).toBeInTheDocument();
   });
 });

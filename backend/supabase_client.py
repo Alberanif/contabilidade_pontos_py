@@ -1545,6 +1545,25 @@ def get_desafio_apuracao(desafio_id: int) -> dict:
             "clas": apuracoes,
         }
 
+    res_dict = _calcular_apuracao_atual_desafio(desafio_id)
+    clas_list = [ap.to_dict() for ap in res_dict.values()]
+    return {
+        "desafio_id": desafio_id,
+        "prazo_apuracao": prazo_apuracao,
+        "apurado_em": None,
+        "provisorio": True,
+        "clas": clas_list,
+    }
+
+
+def _calcular_apuracao_atual_desafio(desafio_id: int) -> dict[str, "ApuracaoClan"]:
+    """Calcula a apuração por percentual de clã de um desafio a partir do
+    estado *atual* de revisões — ignora se o desafio já está `apurado_em`
+    (quem decide se usa o resultado congelado ou recalcula ao vivo é o
+    chamador: `get_desafio_apuracao` para a prévia, `reapurar_desafio_e_aplicar_delta`
+    para reabrir um desafio já congelado). Pós-corte, toda submissão conta por
+    padrão — só `revisao_status == "reprovado"` exclui (mesma regra de
+    `_submissao_conta_para_pontos_individuais_coach`)."""
     submissoes = list_desafio_submissions_current(desafio_id=desafio_id, status="active_counted")
     revisoes_map = list_submissoes_revisoes(desafio_id)
     alias_map = get_coach_alias_map()
@@ -1553,26 +1572,23 @@ def get_desafio_apuracao(desafio_id: int) -> dict:
     for s in submissoes:
         sub_date = _submitted_at_local_date(s.get("submitted_at"))
         token = s.get("token")
-        rev = revisoes_map.get(token, {})
-        rev_status = rev.get("status", "pendente")
+        rev_status = revisoes_map.get(token, {}).get("status", "pendente")
 
-        # Pós-corte requer status == 'aprovado'
         if sub_date and sub_date >= config.DESAFIO_PERCENTUAL_CLAN_CORTE:
-            if rev_status == "aprovado":
-                raw_name = (s.get("raw_name") or "").strip()
-                canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
-                aprovadas.append({
-                    "coach": canonical or raw_name,
-                    "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
-                })
+            conta = rev_status != "reprovado"
         else:
-            # Pre-corte conta se active_counted
-            raw_name = (s.get("raw_name") or "").strip()
-            canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
-            aprovadas.append({
-                "coach": canonical or raw_name,
-                "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
-            })
+            # Pré-corte conta se active_counted, sem qualquer critério de revisão.
+            conta = True
+
+        if not conta:
+            continue
+
+        raw_name = (s.get("raw_name") or "").strip()
+        canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
+        aprovadas.append({
+            "coach": canonical or raw_name,
+            "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
+        })
 
     from desafio_percentual_clan import apurar_desafio
     rows_clas = list_coach_clas()
@@ -1583,18 +1599,9 @@ def get_desafio_apuracao(desafio_id: int) -> dict:
         tamanho_grupo[c] = tamanho_grupo.get(c, 0) + 1
 
     todos_clas = ["CLÃ 1", "CLÃ 2", "CLÃ 3", "CLÃ 4", "CLÃ 5", "CLÃ 6", "CLÃ 7", "CLÃ 8"]
-    res_dict = apurar_desafio(
+    return apurar_desafio(
         submissoes_aprovadas=aprovadas,
         coach_clas=coach_clas,
         tamanho_grupo_por_clan=tamanho_grupo,
         todos_os_clas=todos_clas,
     )
-
-    clas_list = [ap.to_dict() for ap in res_dict.values()]
-    return {
-        "desafio_id": desafio_id,
-        "prazo_apuracao": prazo_apuracao,
-        "apurado_em": None,
-        "provisorio": True,
-        "clas": clas_list,
-    }

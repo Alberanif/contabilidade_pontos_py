@@ -112,20 +112,19 @@ def test_fluxo_e2e_apuracao_desafio_pos_corte():
 
         mock_sync.return_value = DesafioSyncResult(status="success", tokens_versioned=0)
 
-        # 1. Antes de aprovar: Prévia indica 0 aprovados -> 0% -> 0 pts
+        # 1. Antes de qualquer revisão: as duas submissões (Ana e Bruno) já
+        # contam por padrão -> 2 participantes de 4 cadastrados = 50% -> 500 pts
         res_prev = client.get(f"/api/desafios/{desafio_id}/apuracao")
         assert res_prev.status_code == 200
         prev_data = res_prev.json()
         assert prev_data["provisorio"] is True
         cla1_prev = next(c for c in prev_data["clas"] if c["clan"] == "CLÃ 1")
-        assert cla1_prev["participantes"] == 0
-        assert cla1_prev["pontos"] == 0
+        assert cla1_prev["participantes"] == 2
+        assert cla1_prev["pontos"] == 500
 
-        # 2. Aprovar 2 submissões (Ana e Bruno) -> 2 participantes de 4 cadastrados = 50% -> 500 pts
-        rev1 = client.post(f"/api/desafios/submissoes/{token_1}/revisar", json={"status": "aprovado"})
+        # 2. Reprovar a submissão da Ana -> só Bruno conta -> 1 de 4 = 25% -> 300 pts
+        rev1 = client.post(f"/api/desafios/submissoes/{token_1}/revisar", json={"status": "reprovado"})
         assert rev1.status_code == 200
-        rev2 = client.post(f"/api/desafios/submissoes/{token_2}/revisar", json={"status": "aprovado"})
-        assert rev2.status_code == 200
 
         # 3. Disparar /executar contabilidade (prazo já venceu há 1h)
         exec_res = client.post("/api/contabilidade/executar")
@@ -133,9 +132,9 @@ def test_fluxo_e2e_apuracao_desafio_pos_corte():
             print("EXEC ERROR JSON:", exec_res.json())
         assert exec_res.status_code == 200
 
-        # 4. Verificar que a apuração foi gravada e o total do Clã 1 recebeu 500 pts
+        # 4. Verificar que a apuração foi gravada e o total do Clã 1 recebeu 300 pts
         assert desafio_mock["apurado_em"] is not None
-        assert totais_clan_db["CLÃ 1"] == 500
+        assert totais_clan_db["CLÃ 1"] == 300
 
 
 def test_fluxo_reabertura_de_prazo_e_reapuracao():

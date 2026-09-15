@@ -797,7 +797,7 @@ def processar_desafios_apuracao_prazo():
     """
     from datetime import timezone
     try:
-        desafios = supabase_client.list_desafios(status="all")
+        desafios = supabase_client.list_desafios()
         now_utc = datetime.now(timezone.utc)
 
         for d in desafios:

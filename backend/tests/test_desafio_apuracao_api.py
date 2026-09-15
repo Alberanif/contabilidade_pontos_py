@@ -68,6 +68,40 @@ def test_revisar_submissao_success():
         assert data["status"] == "aprovado"
 
 
+def test_revisar_submissao_desafio_ja_apurado_dispara_reapuracao():
+    with patch("supabase_client.get_desafio_submission_current") as mock_get_sub, \
+         patch("supabase_client.revisar_submissao") as mock_rev, \
+         patch("supabase_client.get_desafio") as mock_get_desafio, \
+         patch("supabase_client.reapurar_desafio_e_aplicar_delta") as mock_reapurar:
+        mock_get_sub.return_value = {"token": "tok1", "desafio_id": 7}
+        mock_rev.return_value = {"token": "tok1", "status": "reprovado"}
+        mock_get_desafio.return_value = {"id": 7, "apurado_em": "2026-09-01T00:00:00+00:00"}
+
+        response = client.post(
+            "/api/desafios/submissoes/tok1/revisar", json={"status": "reprovado"}
+        )
+
+        assert response.status_code == 200
+        mock_reapurar.assert_called_once_with(7)
+
+
+def test_revisar_submissao_desafio_nao_apurado_nao_dispara_reapuracao():
+    with patch("supabase_client.get_desafio_submission_current") as mock_get_sub, \
+         patch("supabase_client.revisar_submissao") as mock_rev, \
+         patch("supabase_client.get_desafio") as mock_get_desafio, \
+         patch("supabase_client.reapurar_desafio_e_aplicar_delta") as mock_reapurar:
+        mock_get_sub.return_value = {"token": "tok1", "desafio_id": 7}
+        mock_rev.return_value = {"token": "tok1", "status": "reprovado"}
+        mock_get_desafio.return_value = {"id": 7, "apurado_em": None}
+
+        response = client.post(
+            "/api/desafios/submissoes/tok1/revisar", json={"status": "reprovado"}
+        )
+
+        assert response.status_code == 200
+        mock_reapurar.assert_not_called()
+
+
 def test_obter_apuracao_desafio():
     with patch("supabase_client.get_desafio") as mock_get, \
          patch("supabase_client.get_desafio_apuracao") as mock_ap:

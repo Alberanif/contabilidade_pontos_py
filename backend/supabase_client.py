@@ -574,11 +574,12 @@ def _submissao_conta_para_pontos_individuais_coach(
 ) -> bool:
     """Mesma regra de corte usada por `get_desafio_apuracao` no eixo clã
     (`config.DESAFIO_PERCENTUAL_CLAN_CORTE`): antes do corte, `active_counted`
-    já basta; a partir do corte, também exige revisão manual aprovada na
-    plataforma."""
+    já basta. A partir do corte, toda submissão conta por padrão — só
+    `revisao_status == "reprovado"` exclui (não há mais exigência de
+    aprovação manual explícita)."""
     sub_date = _submitted_at_local_date(submitted_at)
     if sub_date and sub_date >= config.DESAFIO_PERCENTUAL_CLAN_CORTE:
-        return revisao_status == "aprovado"
+        return revisao_status != "reprovado"
     return True
 
 
@@ -1544,34 +1545,43 @@ def get_desafio_apuracao(desafio_id: int) -> dict:
             "clas": apuracoes,
         }
 
+    res_dict = _calcular_apuracao_atual_desafio(desafio_id)
+    clas_list = [ap.to_dict() for ap in res_dict.values()]
+    return {
+        "desafio_id": desafio_id,
+        "prazo_apuracao": prazo_apuracao,
+        "apurado_em": None,
+        "provisorio": True,
+        "clas": clas_list,
+    }
+
+
+def _calcular_apuracao_atual_desafio(desafio_id: int) -> dict[str, "ApuracaoClan"]:
+    """Calcula a apuração por percentual de clã de um desafio a partir do
+    estado *atual* de revisões — ignora se o desafio já está `apurado_em`
+    (quem decide se usa o resultado congelado ou recalcula ao vivo é o
+    chamador: `get_desafio_apuracao` para a prévia, `reapurar_desafio_e_aplicar_delta`
+    para reabrir um desafio já congelado). Pós-corte, toda submissão conta por
+    padrão — só `revisao_status == "reprovado"` exclui (mesma regra de
+    `_submissao_conta_para_pontos_individuais_coach`)."""
     submissoes = list_desafio_submissions_current(desafio_id=desafio_id, status="active_counted")
     revisoes_map = list_submissoes_revisoes(desafio_id)
     alias_map = get_coach_alias_map()
 
     aprovadas = []
     for s in submissoes:
-        sub_date = _submitted_at_local_date(s.get("submitted_at"))
         token = s.get("token")
-        rev = revisoes_map.get(token, {})
-        rev_status = rev.get("status", "pendente")
+        rev_status = revisoes_map.get(token, {}).get("status", "pendente")
 
-        # Pós-corte requer status == 'aprovado'
-        if sub_date and sub_date >= config.DESAFIO_PERCENTUAL_CLAN_CORTE:
-            if rev_status == "aprovado":
-                raw_name = (s.get("raw_name") or "").strip()
-                canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
-                aprovadas.append({
-                    "coach": canonical or raw_name,
-                    "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
-                })
-        else:
-            # Pre-corte conta se active_counted
-            raw_name = (s.get("raw_name") or "").strip()
-            canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
-            aprovadas.append({
-                "coach": canonical or raw_name,
-                "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
-            })
+        if not _submissao_conta_para_pontos_individuais_coach(s.get("submitted_at"), rev_status):
+            continue
+
+        raw_name = (s.get("raw_name") or "").strip()
+        canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None
+        aprovadas.append({
+            "coach": canonical or raw_name,
+            "clan_planilha": s.get("clan") or s.get("raw_clan_current") or s.get("raw_clan_legacy"),
+        })
 
     from desafio_percentual_clan import apurar_desafio
     rows_clas = list_coach_clas()
@@ -1582,18 +1592,52 @@ def get_desafio_apuracao(desafio_id: int) -> dict:
         tamanho_grupo[c] = tamanho_grupo.get(c, 0) + 1
 
     todos_clas = ["CLÃ 1", "CLÃ 2", "CLÃ 3", "CLÃ 4", "CLÃ 5", "CLÃ 6", "CLÃ 7", "CLÃ 8"]
-    res_dict = apurar_desafio(
+    return apurar_desafio(
         submissoes_aprovadas=aprovadas,
         coach_clas=coach_clas,
         tamanho_grupo_por_clan=tamanho_grupo,
         todos_os_clas=todos_clas,
     )
 
-    clas_list = [ap.to_dict() for ap in res_dict.values()]
-    return {
-        "desafio_id": desafio_id,
-        "prazo_apuracao": prazo_apuracao,
-        "apurado_em": None,
-        "provisorio": True,
-        "clas": clas_list,
-    }
+
+def reapurar_desafio_e_aplicar_delta(desafio_id: int, dry_run: bool = False) -> dict[str, dict]:
+    """Recalcula a apuração por percentual de clã de um desafio a partir do
+    estado *atual* de revisões (`_calcular_apuracao_atual_desafio`) e aplica o
+    delta resultante ao total de cada clã (`pontos_ultimate_totais_por_clan`),
+    regravando o resultado em `desafio_clan_apuracoes`/`desafios.apurado_em`
+    via `salvar_apuracao_clan`.
+
+    Funciona tanto para um desafio ainda não apurado quanto para um já
+    congelado — reabre e refecha a apuração daquele desafio especificamente,
+    sem exigir edição de prazo (chamado por `revisar_submissao`, na API, toda
+    vez que uma submissão de um desafio já apurado é reprovada ou tem a
+    reprovação desfeita) e pelo sweep de prazo vencido
+    (`routers.contabilidade.processar_desafios_apuracao_prazo`).
+
+    `dry_run=True` calcula e retorna o resultado (incluindo o delta por clã)
+    sem gravar nada — usado pelo backfill administrativo para preview.
+
+    Retorna `{}` se o desafio não existir; caso contrário, dict clã ->
+    `ApuracaoClan.to_dict()` acrescido da chave `"delta"` (pontos novos menos
+    pontos gravados anteriormente para aquele clã)."""
+    desafio = get_desafio(desafio_id)
+    if not desafio:
+        return {}
+
+    res_dict = _calcular_apuracao_atual_desafio(desafio_id)
+    apuracoes_anteriores = get_desafio_clan_apuracoes(desafio_id)
+    pontos_antigos = {a["clan"]: a["pontos"] for a in apuracoes_anteriores}
+
+    saida: dict[str, dict] = {}
+    for clan, ap in res_dict.items():
+        delta = ap.pontos - pontos_antigos.get(clan, 0)
+        if delta != 0 and not dry_run:
+            totais = get_clan_totals()
+            atual = totais.get(clan, 0)
+            upsert_clan_total(clan=clan, total=max(0, atual + delta))
+        saida[clan] = {**ap.to_dict(), "delta": delta}
+
+    if not dry_run:
+        salvar_apuracao_clan(desafio_id, res_dict)
+
+    return saida

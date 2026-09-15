@@ -797,7 +797,7 @@ def processar_desafios_apuracao_prazo():
     """
     from datetime import timezone
     try:
-        desafios = supabase_client.list_desafios(status="all")
+        desafios = supabase_client.list_desafios()
         now_utc = datetime.now(timezone.utc)
 
         for d in desafios:
@@ -830,24 +830,7 @@ def processar_desafios_apuracao_prazo():
                         precisa_apurar = True
 
                 if precisa_apurar:
-                    apuracao_atual = supabase_client.get_desafio_apuracao(desafio_id)
-                    clas_novos = apuracao_atual.get("clas", [])
-
-                    apuracoes_anteriores = supabase_client.get_desafio_clan_apuracoes(desafio_id)
-                    pontos_antigos = {a["clan"]: a["pontos"] for a in apuracoes_anteriores}
-
-                    for item in clas_novos:
-                        clan = item["clan"]
-                        novos_pts = item["pontos"]
-                        pts_antigos = pontos_antigos.get(clan, 0)
-                        delta = novos_pts - pts_antigos
-                        if delta != 0:
-                            totais = supabase_client.get_clan_totals()
-                            atual = totais.get(clan, 0)
-                            supabase_client.upsert_clan_total(clan=clan, total=max(0, atual + delta))
-
-                    res_map = {item["clan"]: item for item in clas_novos}
-                    supabase_client.salvar_apuracao_clan(desafio_id, res_map)
+                    supabase_client.reapurar_desafio_e_aplicar_delta(desafio_id)
     except Exception as e:
         # Isolamento: falha na apuração por percentual não invalida a contabilidade
         print(f"Erro ao processar apuração por prazo de desafios: {e}")

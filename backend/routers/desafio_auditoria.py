@@ -238,13 +238,22 @@ def obter_submissao(token: str):
 
 @router.post("/submissoes/{token}/revisar")
 def revisar_submissao(token: str, req: RevisarSubmissaoRequest):
-    """Aprova ou reprova uma submissão individual."""
+    """Aprova ou reprova uma submissão individual. Se o desafio dessa
+    submissão já estiver apurado (`apurado_em` não nulo), reabre e refecha a
+    apuração daquele desafio na mesma chamada (`reapurar_desafio_e_aplicar_delta`)
+    — reprovar/desfazer depois de apurado não fica congelado."""
     submissao = supabase_client.get_desafio_submission_current(token)
     if not submissao:
         raise HTTPException(status_code=404, detail="Token de submissão não encontrado")
-    return supabase_client.revisar_submissao(
+    resultado = supabase_client.revisar_submissao(
         token=token, status=req.status, revisado_por=req.revisado_por
     )
+    desafio_id = submissao.get("desafio_id")
+    if desafio_id is not None:
+        desafio = supabase_client.get_desafio(desafio_id)
+        if desafio and desafio.get("apurado_em"):
+            supabase_client.reapurar_desafio_e_aplicar_delta(desafio_id)
+    return resultado
 
 
 @router.get(

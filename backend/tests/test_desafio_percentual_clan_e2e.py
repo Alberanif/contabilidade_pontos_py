@@ -136,6 +136,13 @@ def test_fluxo_e2e_apuracao_desafio_pos_corte():
         assert desafio_mock["apurado_em"] is not None
         assert totais_clan_db["CLÃ 1"] == 300
 
+        # 5. Desafio já apurado (apurado_em setado no passo 3) — reprovar Bruno
+        # agora deve reabrir e refechar a apuração do clã imediatamente,
+        # sem precisar editar o prazo.
+        rev3 = client.post(f"/api/desafios/submissoes/{token_2}/revisar", json={"status": "reprovado"})
+        assert rev3.status_code == 200
+        assert totais_clan_db["CLÃ 1"] == 0
+
 
 def test_fluxo_reabertura_de_prazo_e_reapuracao():
     desafio_id = 102

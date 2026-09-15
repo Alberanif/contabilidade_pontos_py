@@ -132,7 +132,10 @@ def _process_group_records(
     data_rows: list[list[str]],
     header: list[str],
     processed_hashes: set[str],
-) -> tuple[int, dict[str, int], dict[str, int], dict[str, int]]:
+) -> tuple[int, dict[str, int], dict[str, int]]:
+    """Contabiliza Coaching em grupo/Empresa imediatamente, 30 pontos fixos
+    por registro (config.POINTS_PER_COACHING_INDIVIDUAL) — igual ao Coaching
+    Individual, sem lote de pessoas atendidas nem fila de aprovação manual."""
     group_rows = points_engine.filter_by_modalidades(
         data_rows, COL_MODALIDADE, GROUP_MODALIDADES
     )
@@ -142,38 +145,28 @@ def _process_group_records(
     )
 
     for record_hash, row in new_records:
-        raw_participantes = row[COL_PARTICIPANTES].strip() if COL_PARTICIPANTES < len(row) else ""
-        try:
-            num_participantes = max(1, int(raw_participantes))
-        except (ValueError, AttributeError):
-            num_participantes = 1
         _build_and_insert(
             record_hash, row, header, data_rows,
-            pontos=0,
+            pontos=config.POINTS_PER_COACHING_INDIVIDUAL,
             extra_fields={
-                "status": "pendente",
-                "num_participantes": num_participantes,
-                "status_coach": "pendente",
-                "pontos_coach": 0
+                "status_coach": "contabilizado",
+                "pontos_coach": config.POINTS_PER_COACHING_INDIVIDUAL,
             },
             date_col=config.COL_DATE_PAYING,
         )
 
-    clans_pendentes = supabase_client.get_all_pending_clans(GROUP_MODALIDADES)
-    pendentes_por_clan: dict[str, int] = {}
-    for raw_clan in clans_pendentes:
-        remaining = supabase_client.get_pending_group_records_by_clan(raw_clan, GROUP_MODALIDADES)
-        if remaining:
-            pendentes_por_clan[_normalize_clan(raw_clan)] = len(remaining)
-            
-    coaches_pendentes = supabase_client.get_all_pending_coaches(GROUP_MODALIDADES)
-    pendentes_por_coach: dict[str, int] = {}
-    for c in coaches_pendentes:
-        rem = supabase_client.get_pending_group_records_by_coach(c, GROUP_MODALIDADES)
-        if rem:
-            pendentes_por_coach[c] = len(rem)
+    raw_points = points_engine.calculate_points_by_clan(
+        new_records, COL_CLAN, config.POINTS_PER_COACHING_INDIVIDUAL
+    )
+    pontos_por_clan = {_normalize_clan(k): v for k, v in raw_points.items()}
 
-    return len(new_records), {}, pendentes_por_clan, pendentes_por_coach
+    raw_coach_pts = points_engine.calculate_points_by_coach(
+        new_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+    )
+    pontos_por_coach = coach_identity.aggregate_by_canonical(
+        raw_coach_pts, supabase_client.get_coach_alias_map()
+    )
+    return len(new_records), pontos_por_clan, pontos_por_coach
 
 
 class ImportarResponse(BaseModel):
@@ -182,45 +175,12 @@ class ImportarResponse(BaseModel):
     mensagem: str
 
 
-class AprovarClanRequest(BaseModel):
-    clan: str
-
-class AprovarCoachRequest(BaseModel):
-    coach: str
-
-
-class AprovarClanResponse(BaseModel):
-    clan: str
-    lotes_aprovados: int
-    registros_promovidos: int
-    pessoas_contabilizadas: int
-    pessoas_em_espera: int
-    pontos_adicionados: int
-    novo_total: int
-    pendentes_restantes: int
-    mensagem: str
-
-class AprovarCoachResponse(BaseModel):
-    coach: str
-    lotes_aprovados: int
-    registros_promovidos: int
-    pessoas_contabilizadas: int
-    pessoas_em_espera: int
-    pontos_adicionados: int
-    novo_total: int
-    pendentes_restantes: int
-    mensagem: str
-
-
 class ExecutarResponse(BaseModel):
     novos_registros: int
-    novos_pendentes: int
     pro_bono_registros: int
     pontos_por_clan: dict[str, int]
     pontos_grupo_por_clan: dict[str, int]
-    pendentes_por_clan: dict[str, int]
     pontos_por_coach: dict[str, int]
-    pendentes_por_coach: dict[str, int]
     totais_atualizados: dict[str, int]
     desafios: DesafioSyncResult
     mensagem: str
@@ -234,13 +194,10 @@ class ConfirmarDesafiosRequest(BaseModel):
 class ReprocessarResponse(BaseModel):
     registros_removidos: int
     novos_registros: int
-    novos_pendentes: int
     pro_bono_registros: int
     pontos_por_clan: dict[str, int]
     pontos_grupo_por_clan: dict[str, int]
-    pendentes_por_clan: dict[str, int]
     pontos_por_coach: dict[str, int]
-    pendentes_por_coach: dict[str, int]
     totais_atualizados: dict[str, int]
     mensagem: str
 
@@ -249,12 +206,9 @@ class ImportarInicialResponse(BaseModel):
     registros_removidos: int
     coaching_individual_importados: int
     grupo_contabilizados: int
-    grupo_pendentes: int
     pro_bono_importados: int
     totais_clans: dict[str, int]
-    carry_over_por_clan: dict[str, int]
     totais_coaches: dict[str, int]
-    carry_over_por_coach: dict[str, int]
     mensagem: str
 
 
@@ -308,152 +262,6 @@ def importar_registros():
                 "Nenhum ponto foi alterado."
             ),
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/aprovar-clan", response_model=AprovarClanResponse)
-def aprovar_clan(body: AprovarClanRequest):
-    try:
-        clan = _normalize_clan(body.clan)
-        pending = supabase_client.get_pending_group_records_by_clan(clan, GROUP_MODALIDADES)
-        carry_over = supabase_client.get_clan_carry_over(clan)
-
-        ids_to_promote, n_complete, novo_carry_over = points_engine.compute_batch_promotions_by_people(
-            pending, carry_over, config.BATCH_SIZE_GROUP
-        )
-
-        if n_complete == 0:
-            accumulated = carry_over + sum(r.get("num_participantes", 1) for r in pending)
-            existing = {r["clan"]: r for r in supabase_client.list_clan_totals()}
-            row = existing.get(clan, {})
-            current_total = row.get("total_pontos") or 0
-            supabase_client.upsert_clan_total(
-                clan, current_total,
-                pessoas_em_espera=accumulated,
-                total_pagante=(row.get("total_pagante") or 0),
-                total_pro_bono=(row.get("total_pro_bono") or 0),
-            )
-            return AprovarClanResponse(
-                clan=clan,
-                lotes_aprovados=0,
-                registros_promovidos=0,
-                pessoas_contabilizadas=0,
-                pessoas_em_espera=accumulated,
-                pontos_adicionados=0,
-                novo_total=current_total,
-                pendentes_restantes=len(pending),
-                mensagem=f"Nenhum lote completo disponível. {len(pending)} registro(s) ainda aguardando.",
-            )
-
-        pessoas_contabilizadas = carry_over + sum(r.get("num_participantes", 1) for r in pending)
-
-        supabase_client.promote_pending_to_contabilizado(
-            ids_to_promote, config.POINTS_PER_RECORD_IN_BATCH
-        )
-        pontos_adicionados = n_complete * config.POINTS_PER_BATCH_GROUP
-        existing = {r["clan"]: r for r in supabase_client.list_clan_totals()}
-        row = existing.get(clan, {})
-        novo_total = (row.get("total_pontos") or 0) + pontos_adicionados
-        supabase_client.upsert_clan_total(
-            clan, novo_total,
-            pessoas_em_espera=novo_carry_over,
-            total_pagante=(row.get("total_pagante") or 0) + pontos_adicionados,
-            total_pro_bono=(row.get("total_pro_bono") or 0),
-        )
-
-        pendentes_restantes = len(pending) - len(ids_to_promote)
-
-        return AprovarClanResponse(
-            clan=clan,
-            lotes_aprovados=n_complete,
-            registros_promovidos=len(ids_to_promote),
-            pessoas_contabilizadas=pessoas_contabilizadas,
-            pessoas_em_espera=novo_carry_over,
-            pontos_adicionados=pontos_adicionados,
-            novo_total=novo_total,
-            pendentes_restantes=pendentes_restantes,
-            mensagem=(
-                f"{n_complete} lote(s) aprovado(s) para {clan}. "
-                f"+{pontos_adicionados} pontos. "
-                f"Total agora: {novo_total} pts. "
-                f"{novo_carry_over} pessoa(s) em espera."
-            ),
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/aprovar-coach", response_model=AprovarCoachResponse)
-def aprovar_coach(body: AprovarCoachRequest):
-    try:
-        coach = _normalize_coach(body.coach)
-        pending = supabase_client.get_pending_group_records_by_coach(coach, GROUP_MODALIDADES)
-        carry_over = supabase_client.get_coach_carry_over(coach)
-
-        ids_to_promote, n_complete, novo_carry_over = points_engine.compute_batch_promotions_by_people(
-            pending, carry_over, config.BATCH_SIZE_GROUP
-        )
-
-        if n_complete == 0:
-            accumulated = carry_over + sum(r.get("num_participantes", 1) for r in pending)
-            existing = {r["coach"]: r for r in supabase_client.list_coach_totals()}
-            row = existing.get(coach, {})
-            current_total = row.get("total_pontos") or 0
-            supabase_client.upsert_coach_total(
-                coach, current_total,
-                pessoas_em_espera=accumulated,
-                total_pagante=(row.get("total_pagante") or 0),
-                total_pro_bono=(row.get("total_pro_bono") or 0),
-            )
-            return AprovarCoachResponse(
-                coach=coach,
-                lotes_aprovados=0,
-                registros_promovidos=0,
-                pessoas_contabilizadas=0,
-                pessoas_em_espera=accumulated,
-                pontos_adicionados=0,
-                novo_total=current_total,
-                pendentes_restantes=len(pending),
-                mensagem=f"Nenhum lote completo disponível. {len(pending)} registro(s) ainda aguardando.",
-            )
-
-        pessoas_contabilizadas = carry_over + sum(r.get("num_participantes", 1) for r in pending)
-
-        supabase_client.promote_pending_to_contabilizado_coach(
-            ids_to_promote, config.POINTS_PER_RECORD_IN_BATCH
-        )
-        pontos_adicionados = n_complete * config.POINTS_PER_BATCH_GROUP
-        existing = {r["coach"]: r for r in supabase_client.list_coach_totals()}
-        row = existing.get(coach, {})
-        novo_total = (row.get("total_pontos") or 0) + pontos_adicionados
-        supabase_client.upsert_coach_total(
-            coach, novo_total,
-            pessoas_em_espera=novo_carry_over,
-            total_pagante=(row.get("total_pagante") or 0) + pontos_adicionados,
-            total_pro_bono=(row.get("total_pro_bono") or 0),
-        )
-
-        pendentes_restantes = len(pending) - len(ids_to_promote)
-
-        return AprovarCoachResponse(
-            coach=coach,
-            lotes_aprovados=n_complete,
-            registros_promovidos=len(ids_to_promote),
-            pessoas_contabilizadas=pessoas_contabilizadas,
-            pessoas_em_espera=novo_carry_over,
-            pontos_adicionados=pontos_adicionados,
-            novo_total=novo_total,
-            pendentes_restantes=pendentes_restantes,
-            mensagem=(
-                f"{n_complete} lote(s) aprovado(s) para {coach}. "
-                f"+{pontos_adicionados} pontos. "
-                f"Total agora: {novo_total} pts. "
-                f"{novo_carry_over} pessoa(s) em espera."
-            ),
-        )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -527,28 +335,22 @@ def reprocessar_coaches():
                 for r in regs_canonico
                 if (r.get("modalidade") or "").strip().upper() == "PRO-BONO"
             )
-            group_people = sum(
-                r.get("num_participantes") or 1
+            group_pts = sum(
+                r.get("pontos_coach") or 0
                 for r in regs_canonico
                 if (r.get("modalidade") or "").strip().upper() in group_modalidades_upper
                 and r.get("status_coach") == "contabilizado"
             )
-            lotes = group_people // config.BATCH_SIZE_GROUP
-            novo_carry = group_people % config.BATCH_SIZE_GROUP
-            group_pts = lotes * config.POINTS_PER_BATCH_GROUP
             total_pagante = ci_pts + group_pts
             desafio_pts = desafio_coach_totals.get(canonical, 0)
             total_pontos = total_pagante + pb_pts + desafio_pts
             supabase_client.upsert_coach_total(
                 canonical, total_pontos,
-                pessoas_em_espera=novo_carry,
+                pessoas_em_espera=0,
                 total_pagante=total_pagante,
                 total_pro_bono=pb_pts,
             )
             totais_recalculados[canonical] = total_pontos
-
-        for canonical in coaches_afetados:
-            aprovar_coach(AprovarCoachRequest(coach=canonical))
 
         return ReprocessarCoachesResponse(
             registros_atualizados=registros_atualizados,
@@ -844,9 +646,9 @@ def executar_contabilidade():
         rows = google_sheets_client.fetch_records()
         if not rows:
             return ExecutarResponse(
-                novos_registros=0, novos_pendentes=0, pro_bono_registros=0,
+                novos_registros=0, pro_bono_registros=0,
                 pontos_por_clan={}, pontos_grupo_por_clan={},
-                pendentes_por_clan={}, pontos_por_coach={}, pendentes_por_coach={},
+                pontos_por_coach={},
                 totais_atualizados={},
                 desafios=desafios_result,
                 mensagem="Nenhum dado encontrado na planilha de registros.",
@@ -888,7 +690,7 @@ def executar_contabilidade():
         )
 
         processed_hashes = supabase_client.get_processed_hashes()
-        novos_pendentes, pontos_grupo_por_clan, pendentes_por_clan, pendentes_por_coach = _process_group_records(
+        novos_grupo, pontos_grupo_por_clan, pontos_grupo_por_coach = _process_group_records(
             data_rows, header, processed_hashes
         )
 
@@ -923,8 +725,13 @@ def executar_contabilidade():
         else:
             totais_atualizados = {}
 
+        pagante_coach_new: dict[str, int] = {}
+        for source in (pontos_por_coach, pontos_grupo_por_coach):
+            for coach, pts in source.items():
+                pagante_coach_new[coach] = pagante_coach_new.get(coach, 0) + pts
+
         all_coach_points: dict[str, int] = {}
-        for source in (pontos_por_coach, pro_bono_coach_pts):
+        for source in (pagante_coach_new, pro_bono_coach_pts):
             for coach, pts in source.items():
                 all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
@@ -935,15 +742,15 @@ def executar_contabilidade():
                 supabase_client.upsert_coach_total(
                     coach,
                     (row.get("total_pontos") or 0) + new_points,
-                    total_pagante=(row.get("total_pagante") or 0) + pontos_por_coach.get(coach, 0),
+                    total_pagante=(row.get("total_pagante") or 0) + pagante_coach_new.get(coach, 0),
                     total_pro_bono=(row.get("total_pro_bono") or 0) + pro_bono_coach_pts.get(coach, 0),
                 )
 
         partes = []
         if new_records:
             partes.append(f"{len(new_records)} Coaching Individual contabilizados")
-        if novos_pendentes:
-            partes.append(f"{novos_pendentes} registro(s) de grupo/empresa adicionados à fila")
+        if novos_grupo:
+            partes.append(f"{novos_grupo} Coaching em grupo/Empresa contabilizados")
         if n_pro_bono:
             partes.append(f"{n_pro_bono} Pro-bono contabilizados")
         if not partes:
@@ -957,13 +764,10 @@ def executar_contabilidade():
 
         return ExecutarResponse(
             novos_registros=len(new_records),
-            novos_pendentes=novos_pendentes,
             pro_bono_registros=n_pro_bono,
             pontos_por_clan=pontos_por_clan,
             pontos_grupo_por_clan=pontos_grupo_por_clan,
-            pendentes_por_clan=pendentes_por_clan,
             pontos_por_coach=all_coach_points,
-            pendentes_por_coach=pendentes_por_coach,
             totais_atualizados=totais_atualizados,
             desafios=desafios_result,
             mensagem=". ".join(partes) + ".",
@@ -1010,9 +814,9 @@ def reprocessar_contabilidade():
         if not rows:
             return ReprocessarResponse(
                 registros_removidos=registros_removidos,
-                novos_registros=0, novos_pendentes=0, pro_bono_registros=0,
+                novos_registros=0, pro_bono_registros=0,
                 pontos_por_clan={}, pontos_grupo_por_clan={},
-                pendentes_por_clan={}, pontos_por_coach={}, pendentes_por_coach={},
+                pontos_por_coach={},
                 totais_atualizados={},
                 mensagem="Registros limpos. Nenhum dado na planilha de registros.",
             )
@@ -1053,7 +857,7 @@ def reprocessar_contabilidade():
             raw_coach_pts, supabase_client.get_coach_alias_map()
         )
 
-        novos_pendentes, pontos_grupo_por_clan, pendentes_por_clan, pendentes_por_coach = _process_group_records(
+        novos_grupo, pontos_grupo_por_clan, pontos_grupo_por_coach = _process_group_records(
             data_rows, header, processed_hashes=set()
         )
 
@@ -1070,8 +874,13 @@ def reprocessar_contabilidade():
             for clan, pts in source.items():
                 all_points[clan] = all_points.get(clan, 0) + pts
 
+        pagante_coach_pts: dict[str, int] = {}
+        for source in (pontos_por_coach, pontos_grupo_por_coach):
+            for coach, pts in source.items():
+                pagante_coach_pts[coach] = pagante_coach_pts.get(coach, 0) + pts
+
         all_coach_points: dict[str, int] = {}
-        for source in (pontos_por_coach, pro_bono_coach_pts):
+        for source in (pagante_coach_pts, pro_bono_coach_pts):
             for coach, pts in source.items():
                 all_coach_points[coach] = all_coach_points.get(coach, 0) + pts
 
@@ -1095,7 +904,7 @@ def reprocessar_contabilidade():
             totais_finais_coach[coach] = total
             supabase_client.upsert_coach_total(
                 coach, total,
-                total_pagante=pontos_por_coach.get(coach, 0),
+                total_pagante=pagante_coach_pts.get(coach, 0),
                 total_pro_bono=pro_bono_coach_pts.get(coach, 0),
             )
 
@@ -1103,21 +912,18 @@ def reprocessar_contabilidade():
             f"{registros_removidos} removidos",
             f"{len(new_records)} Coaching Individual processados",
         ]
-        if novos_pendentes:
-            partes.append(f"{novos_pendentes} grupo/empresa na fila")
+        if novos_grupo:
+            partes.append(f"{novos_grupo} Coaching em grupo/Empresa processados")
         if n_pro_bono:
             partes.append(f"{n_pro_bono} Pro-bono contabilizados")
 
         return ReprocessarResponse(
             registros_removidos=registros_removidos,
             novos_registros=len(new_records),
-            novos_pendentes=novos_pendentes,
             pro_bono_registros=n_pro_bono,
             pontos_por_clan=pontos_por_clan,
             pontos_grupo_por_clan=pontos_grupo_por_clan,
-            pendentes_por_clan=pendentes_por_clan,
             pontos_por_coach=totais_finais_coach,
-            pendentes_por_coach=pendentes_por_coach,
             totais_atualizados=totais_finais_clan,
             mensagem=f"Reprocessamento completo: {'. '.join(partes)}.",
         )
@@ -1129,9 +935,9 @@ def reprocessar_contabilidade():
 @router.post("/importar-inicial", response_model=ImportarInicialResponse)
 def importar_inicial():
     """Importa todos os registros da planilha, semeando totais da planilha de pontuação.
-    Registros de grupo com pessoas suficientes (>= lote) → contabilizado.
-    Registros de grupo sem lote completo → pendente (fila para futuras contabilizações).
-    Apaga todos os dados existentes antes."""
+    Registros de grupo/empresa são contabilizados imediatamente (30 pontos
+    fixos por registro, igual ao Coaching Individual — sem lote de pessoas
+    atendidas). Apaga todos os dados existentes antes."""
     try:
         # Fase 1: Limpar banco
         registros_removidos = supabase_client.delete_all_registros()
@@ -1144,12 +950,9 @@ def importar_inicial():
                 registros_removidos=registros_removidos,
                 coaching_individual_importados=0,
                 grupo_contabilizados=0,
-                grupo_pendentes=0,
                 pro_bono_importados=0,
                 totais_clans={},
-                carry_over_por_clan={},
                 totais_coaches={},
-                carry_over_por_coach={},
                 mensagem="Registros limpos. Nenhum dado na planilha de registros.",
             )
 
@@ -1176,8 +979,8 @@ def importar_inicial():
                 date_col=config.COL_DATE_PAYING,
             )
 
-        # Fase 4: Pré-calcular total de pessoas por clã e por coach nos registros de grupo.
-        # Isso determina se os registros vão como contabilizado ou pendente.
+        # Fase 4: Importar Coaching em grupo/Empresa como contabilizado (30
+        # pontos fixos por registro, igual ao Coaching Individual).
         group_rows = points_engine.filter_by_modalidades(
             data_rows, COL_MODALIDADE, GROUP_MODALIDADES
         )
@@ -1186,56 +989,19 @@ def importar_inicial():
             for row in group_rows
         ]
 
-        clan_group_people: dict[str, int] = {}
-        coach_group_people: dict[str, int] = {}
-        for _, row in group_records:
-            clan = _normalize_clan(row[COL_CLAN]) if COL_CLAN < len(row) else "DESCONHECIDO"
-            coach = _normalize_coach(row[COL_COACH]) if COL_COACH < len(row) else "DESCONHECIDO"
-            raw_part = row[COL_PARTICIPANTES].strip() if COL_PARTICIPANTES < len(row) else ""
-            try:
-                n = max(1, int(raw_part))
-            except (ValueError, AttributeError):
-                n = 1
-            clan_group_people[clan] = clan_group_people.get(clan, 0) + n
-            coach_group_people[coach] = coach_group_people.get(coach, 0) + n
-
-        # Clãs/coaches com total >= BATCH_SIZE tiveram pelo menos 1 lote completo.
-        # Seus registros vão como contabilizado (a pontuação já está na planilha).
-        # Clãs/coaches com total < BATCH_SIZE nunca completaram um lote: vão para pendente.
-        clans_com_lote = {c for c, t in clan_group_people.items() if t >= config.BATCH_SIZE_GROUP}
-        coaches_com_lote = {c for c, t in coach_group_people.items() if t >= config.BATCH_SIZE_GROUP}
-
-        grupo_contabilizados = 0
-        grupo_pendentes = 0
-
         for record_hash, row in group_records:
-            clan = _normalize_clan(row[COL_CLAN]) if COL_CLAN < len(row) else "DESCONHECIDO"
-            coach = _normalize_coach(row[COL_COACH]) if COL_COACH < len(row) else "DESCONHECIDO"
-            raw_part = row[COL_PARTICIPANTES].strip() if COL_PARTICIPANTES < len(row) else ""
-            try:
-                num_participantes = max(1, int(raw_part))
-            except (ValueError, AttributeError):
-                num_participantes = 1
-
-            status = "contabilizado" if clan in clans_com_lote else "pendente"
-            status_coach = "contabilizado" if coach in coaches_com_lote else "pendente"
-
             _build_and_insert(
                 record_hash, row, header, data_rows,
-                pontos=config.POINTS_PER_RECORD_IN_BATCH if status == "contabilizado" else 0,
+                pontos=config.POINTS_PER_COACHING_INDIVIDUAL,
                 extra_fields={
-                    "status": status,
-                    "status_coach": status_coach,
-                    "num_participantes": num_participantes,
-                    "pontos_coach": 0,
+                    "status": "contabilizado",
+                    "status_coach": "contabilizado",
+                    "pontos_coach": config.POINTS_PER_COACHING_INDIVIDUAL,
                 },
                 date_col=config.COL_DATE_PAYING,
             )
 
-            if status == "contabilizado":
-                grupo_contabilizados += 1
-            else:
-                grupo_pendentes += 1
+        grupo_contabilizados = len(group_records)
 
         # Fase 5: Seed totais dos clãs a partir da planilha de pontuação
         ranking = google_sheets_client.fetch_ranking()
@@ -1255,29 +1021,30 @@ def importar_inicial():
         # Fase 6: Totais e carry-over por clã.
         # - Lote completo: carry_over = total_pessoas % BATCH_SIZE (sobra do último lote)
         # - Sem lote completo: carry_over = 0 (as pessoas pendentes ficam nos registros, não no carry-over)
-        carry_over_por_clan: dict[str, int] = {}
-        all_clans = set(clan_totals_from_sheet.keys()) | set(clan_group_people.keys())
+        all_clans = set(clan_totals_from_sheet.keys())
         for clan in all_clans:
             official = clan_totals_from_sheet.get(clan, 0)
             pro_bono = pro_bono_by_clan.get(clan, 0)
             desafio = desafio_by_clan.get(clan, 0)
             pagante = max(0, official - pro_bono - desafio)
-            pessoas = clan_group_people.get(clan, 0)
-            carry_over = pessoas % config.BATCH_SIZE_GROUP if clan in clans_com_lote else 0
-            carry_over_por_clan[clan] = carry_over
             supabase_client.upsert_clan_total(
                 clan, official,
-                pessoas_em_espera=carry_over,
+                pessoas_em_espera=0,
                 total_pagante=pagante,
                 total_pro_bono=pro_bono,
             )
 
-        # Fase 7: Totais e carry-over por coach.
+        # Fase 7: Totais por coach.
         coach_alias_map = supabase_client.get_coach_alias_map()
         raw_pontos_por_coach = points_engine.calculate_points_by_coach(
             coaching_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
         )
         pontos_por_coach = coach_identity.aggregate_by_canonical(raw_pontos_por_coach, coach_alias_map)
+
+        raw_group_coach_pts = points_engine.calculate_points_by_coach(
+            group_records, COL_COACH, config.POINTS_PER_COACHING_INDIVIDUAL
+        )
+        group_coach_pts = coach_identity.aggregate_by_canonical(raw_group_coach_pts, coach_alias_map)
 
         desafio_coach_totals = supabase_client.get_tipo_coach_totals("desafios")
 
@@ -1294,24 +1061,20 @@ def importar_inicial():
             raw_pro_bono_coach_pts_seed, coach_alias_map
         )
 
-        carry_over_por_coach: dict[str, int] = {}
         all_coaches = (
             set(pontos_por_coach.keys())
-            | set(coach_group_people.keys())
+            | set(group_coach_pts.keys())
             | set(pro_bono_coach_pts_seed.keys())
             | set(desafio_coach_totals.keys())
         )
         for coach in all_coaches:
-            ci_pts = pontos_por_coach.get(coach, 0)
+            ci_pts = pontos_por_coach.get(coach, 0) + group_coach_pts.get(coach, 0)
             pb_pts = pro_bono_coach_pts_seed.get(coach, 0)
             desafio_pts = desafio_coach_totals.get(coach, 0)
             total = ci_pts + pb_pts + desafio_pts
-            pessoas = coach_group_people.get(coach, 0)
-            carry_over = pessoas % config.BATCH_SIZE_GROUP if coach in coaches_com_lote else 0
-            carry_over_por_coach[coach] = carry_over
             supabase_client.upsert_coach_total(
                 coach, total,
-                pessoas_em_espera=carry_over,
+                pessoas_em_espera=0,
                 total_pagante=ci_pts,
                 total_pro_bono=pb_pts,
             )
@@ -1347,8 +1110,6 @@ def importar_inicial():
             f"{len(coaching_records)} Coaching Individual importados",
             f"{grupo_contabilizados} grupo/empresa contabilizados",
         ]
-        if grupo_pendentes:
-            partes.append(f"{grupo_pendentes} grupo/empresa na fila (aguardando lote completo)")
         if pro_bono_importados:
             partes.append(f"{pro_bono_importados} Pro-bono importados")
 
@@ -1356,12 +1117,9 @@ def importar_inicial():
             registros_removidos=registros_removidos,
             coaching_individual_importados=len(coaching_records),
             grupo_contabilizados=grupo_contabilizados,
-            grupo_pendentes=grupo_pendentes,
             pro_bono_importados=pro_bono_importados,
             totais_clans=clan_totals_from_sheet,
-            carry_over_por_clan=carry_over_por_clan,
             totais_coaches=pontos_por_coach,
-            carry_over_por_coach=carry_over_por_coach,
             mensagem=f"Importação inicial concluída: {'. '.join(partes)}.",
         )
 

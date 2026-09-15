@@ -25,8 +25,9 @@ def _ci_row(date_str: str, key: str = "key_ci") -> list[str]:
     return ["1", "Coach A", "", "", "", "Coaching Individual", "", "", "", "", date_str, key]
 
 
-class TestGroupRecordAlwaysPendente:
-    """Registros de grupo via executar devem sempre ter status_coach='pendente'."""
+class TestGroupRecordAlwaysContabilizado:
+    """Registros de grupo/empresa são contabilizados imediatamente, 30 pontos
+    fixos (config.POINTS_PER_COACHING_INDIVIDUAL), sem lote de pessoas."""
 
     def _run(self, date_str: str) -> list[dict]:
         row = _group_row(date_str)
@@ -38,26 +39,26 @@ class TestGroupRecordAlwaysPendente:
             return rec
 
         with patch("supabase_client.insert_processed_record", side_effect=capture), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_pending_group_records_by_clan", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
-             patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
              patch("supabase_client.get_coach_alias_map", return_value={}):
             _process_group_records([row], header, processed_hashes=set())
 
         return inserted
 
-    def test_group_record_early_in_window_gets_status_coach_pendente(self):
+    def test_group_record_early_in_window_gets_status_coach_contabilizado(self):
         # Datas a partir de config.DATA_INICIO_CONTABILIZACAO (01/08/2026) —
         # antes disso o registro nem é inserido (ver test_data_inicio_contabilizacao.py).
         inserted = self._run("05/08/2026")
         assert len(inserted) == 1
-        assert inserted[0]["status_coach"] == "pendente"
+        assert inserted[0]["status_coach"] == "contabilizado"
+        assert inserted[0]["pontos"] == 30
+        assert inserted[0]["pontos_coach"] == 30
 
-    def test_group_record_later_in_window_gets_status_coach_pendente(self):
+    def test_group_record_later_in_window_gets_status_coach_contabilizado(self):
         inserted = self._run("15/09/2026")
         assert len(inserted) == 1
-        assert inserted[0]["status_coach"] == "pendente"
+        assert inserted[0]["status_coach"] == "contabilizado"
+        assert inserted[0]["pontos"] == 30
+        assert inserted[0]["pontos_coach"] == 30
 
 
 class TestProBonoAlways10Pts:
@@ -88,8 +89,6 @@ class TestProBonoAlways10Pts:
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \
              patch("supabase_client.upsert_clan_total", return_value={}), \
              patch("supabase_client.upsert_coach_total", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
              patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.get_coach_alias_map", return_value={}):
             importar_inicial()
@@ -130,8 +129,6 @@ class TestIndividualCoachingAlways30Pts:
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \
              patch("supabase_client.upsert_clan_total", return_value={}), \
              patch("supabase_client.upsert_coach_total", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
              patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.get_coach_alias_map", return_value={}):
             importar_inicial()
@@ -177,8 +174,6 @@ class TestImportarInicialSomaDesafioNoTotalDoCoach:
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \
              patch("supabase_client.upsert_clan_total", return_value={}), \
              patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert_coach, \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
              patch("supabase_client.get_tipo_coach_totals",
                    return_value={"Coach A": 20}) as mock_tipo_coach, \
              patch("supabase_client.get_coach_alias_map", return_value={}):

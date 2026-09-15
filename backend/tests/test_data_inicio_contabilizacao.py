@@ -67,9 +67,7 @@ class TestProcessGroupRecordsIgnoraAnteriorAoCorte:
     def test_so_insere_o_registro_a_partir_do_corte(self):
         header, data_rows = self._rows()
         with patch("supabase_client.insert_processed_record", side_effect=lambda r: r) as mock_insert, \
-             patch("supabase_client.get_coach_alias_map", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]):
+             patch("supabase_client.get_coach_alias_map", return_value={}):
             _process_group_records(data_rows, header, set())
 
         assert mock_insert.call_count == 1
@@ -95,8 +93,6 @@ class TestExecutarContabilidadeIgnoraCoachingIndividualAnteriorAoCorte:
              patch("google_sheets_client.fetch_records_pro_bono", return_value=None), \
              patch("supabase_client.get_processed_hashes", return_value=set()), \
              patch("supabase_client.get_coach_alias_map", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
              patch("supabase_client.list_clan_totals", return_value=[]), \
              patch("supabase_client.list_coach_totals", return_value=[]), \
              patch("supabase_client.upsert_clan_total"), \
@@ -129,8 +125,6 @@ class TestReprocessarContabilidadeIgnoraCoachingIndividualAnteriorAoCorte:
              patch("google_sheets_client.fetch_records", return_value=self._rows()), \
              patch("google_sheets_client.fetch_records_pro_bono", return_value=None), \
              patch("supabase_client.get_coach_alias_map", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
              patch("supabase_client.insert_processed_record", side_effect=lambda r: r) as mock_insert, \
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \
              patch("supabase_client.get_tipo_coach_totals", return_value={}), \

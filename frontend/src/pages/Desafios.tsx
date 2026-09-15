@@ -134,6 +134,7 @@ export default function Desafios() {
   const [erroDetalhe, setErroDetalhe] = useState("");
 
   const [filtros, setFiltros] = useState<DesafioFiltersValue>({
+    coach: "",
     clan: "",
     status: "",
     dataInicio: "",
@@ -369,7 +370,7 @@ export default function Desafios() {
   // --- Ações de navegação ---
 
   const abrirDesafio = (id: number) => {
-    setFiltros({ clan: "", status: "", dataInicio: "", dataFim: "" });
+    setFiltros({ coach: "", clan: "", status: "", dataInicio: "", dataFim: "" });
     setPaginaSubmissoes(1);
     setDesafioView({ name: "detalhe", id });
   };
@@ -406,7 +407,10 @@ export default function Desafios() {
 
   const TAMANHO_PAGINA_SUBMISSOES = 10;
 
+  const buscaCoach = filtros.coach.trim().toLocaleLowerCase();
+
   const submissoesFiltradas = submissoes.filter((s) => {
+    if (buscaCoach && !(s.coach ?? "").toLocaleLowerCase().includes(buscaCoach)) return false;
     if (!filtros.dataInicio && !filtros.dataFim) return true;
     if (!s.submitted_at) return false;
     const dia = s.submitted_at.slice(0, 10);

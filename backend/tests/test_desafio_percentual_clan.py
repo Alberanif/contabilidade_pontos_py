@@ -56,13 +56,19 @@ def test_calcular_pontos_por_percentual_faixas_exatas():
     assert calcular_pontos_por_percentual(120.0) == 1000
 
 
-def test_apurar_desafio_precedencia_e_deduplicacao():
+def test_apurar_desafio_precedencia_sem_deduplicacao():
+    """Cada submissão aprovada conta como um participante — mesmo coach
+    enviando mais de uma vez soma mais de uma vez (issue: clã 4 do "Desafio
+    Pontual A" tinha 20 submissões válidas na janela, mas a apuração
+    deduplicava por coach canônico e contava só 17; a defesa contra
+    reenvio indevido é a reprovação manual da submissão, não a
+    deduplicação automática)."""
     submissoes = [
         # Coach 1 cadastrado no Clã 1 na base, mas planilha declarou Clã 2 -> Deve ir para Clã 1
         {"coach": "Coach Um", "clan_planilha": "CLÃ 2"},
-        # Coach 1 enviou duas vezes -> Deve ser deduplicado (1 participante)
+        # Coach 1 enviou duas vezes -> conta as duas (2º participante do Clã 1)
         {"coach": "Coach Um", "clan_planilha": "CLÃ 2"},
-        # Coach 2 cadastrado no Clã 1 -> Conta no Clã 1 (2º participante)
+        # Coach 2 cadastrado no Clã 1 -> Conta no Clã 1 (3º participante)
         {"coach": "Coach Dois", "clan_planilha": "CLÃ 1"},
         # Coach 3 NÃO cadastrado -> Cai no Clã 2 pela planilha
         {"coach": "Coach Tres Nao Cadastrado", "clan_planilha": "CLÃ 2"},
@@ -87,10 +93,10 @@ def test_apurar_desafio_precedencia_e_deduplicacao():
         todos_os_clas=todos_os_clas,
     )
 
-    # Clã 1: 2 participantes de 10 -> 20.0% -> 300 pts
-    assert resultado["CLÃ 1"].participantes == 2
+    # Clã 1: 3 submissões (Coach Um x2 + Coach Dois) de 10 -> 30.0% -> 300 pts
+    assert resultado["CLÃ 1"].participantes == 3
     assert resultado["CLÃ 1"].total_grupo == 10
-    assert resultado["CLÃ 1"].percentual == 20.0
+    assert resultado["CLÃ 1"].percentual == 30.0
     assert resultado["CLÃ 1"].pontos == 300
 
     # Clã 2: 1 participante (Coach 3) de 5 -> 20.0% -> 300 pts

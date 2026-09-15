@@ -31,6 +31,30 @@ def filter_by_modalidade(
     return result
 
 
+def get_ids_needing_grupo_correction(
+    registros: list[dict],
+    group_modalidades: list[str],
+    pontos_flat: int,
+) -> list[int]:
+    """Identifica registros de Coaching em grupo/Empresa (`registros`, no
+    formato de `supabase_client.fetch_all_registros_contabilizados`) ainda
+    presos no antigo esquema de lote de 5 pessoas — `pontos`/`pontos_coach`
+    igual a 0 (pendente) ou a um valor parcial de lote — em vez do valor flat
+    atual (`pontos_flat`, igual em ambos os eixos). Usado pela correção
+    retroativa não-destrutiva (issue #42); não lê nem escreve nada."""
+    group_set = {m.strip().upper() for m in group_modalidades}
+    ids: list[int] = []
+    for r in registros:
+        modalidade = (r.get("modalidade") or "").strip().upper()
+        if modalidade not in group_set:
+            continue
+        precisa_clan = r.get("pontos") != pontos_flat or r.get("status") != "contabilizado"
+        precisa_coach = r.get("pontos_coach") != pontos_flat or r.get("status_coach") != "contabilizado"
+        if precisa_clan or precisa_coach:
+            ids.append(r["id"])
+    return ids
+
+
 def filter_by_modalidades(
     rows: list[list[str]], modalidade_col: int, modalidade_values: list[str]
 ) -> list[list[str]]:
@@ -52,27 +76,6 @@ def compute_batch_promotions(
     n_complete = len(pending_records) // batch_size
     ids_to_promote = [r["id"] for r in pending_records[: n_complete * batch_size]]
     return ids_to_promote, n_complete
-
-
-def compute_batch_promotions_by_people(
-    pending_records: list[dict],
-    pessoas_em_espera: int,
-    batch_size: int,
-) -> tuple[list[int], int, int]:
-    """Calcula lotes baseados em número de pessoas (não registros).
-
-    Soma os participantes de todos os registros pendentes com o carry-over
-    existente. Todos os registros pendentes são promovidos de uma vez.
-
-    Retorna (ids_para_promover, n_lotes_completos, novo_carry_over).
-    """
-    total_pessoas = pessoas_em_espera + sum(
-        r.get("num_participantes", 1) for r in pending_records
-    )
-    n_lotes = total_pessoas // batch_size
-    novo_carry_over = total_pessoas % batch_size
-    ids_to_promote = [r["id"] for r in pending_records]
-    return ids_to_promote, n_lotes, novo_carry_over
 
 
 def find_new_records(

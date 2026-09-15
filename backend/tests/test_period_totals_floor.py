@@ -22,37 +22,21 @@ def _mock_client(records):
     return client
 
 
-class TestGetPeriodClanTotalsFloor:
+class TestGetPeriodClanTotalsSemFloor:
+    """Coaching em grupo/Empresa vale 30 pontos fixos por registro, igual ao
+    Coaching Individual — sem lote de pessoas, sem flooragem."""
 
-    def test_partial_group_6pts_returns_zero(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6}]
-        with patch("supabase_client._get_client", return_value=_mock_client(records)):
-            result = supabase_client.get_period_clan_totals(INICIO, FIM)
-        assert result.get("CLÃ 1", 0) == 0
-
-    def test_partial_group_24pts_returns_zero(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6} for _ in range(4)]
-        with patch("supabase_client._get_client", return_value=_mock_client(records)):
-            result = supabase_client.get_period_clan_totals(INICIO, FIM)
-        assert result.get("CLÃ 1", 0) == 0
-
-    def test_full_batch_5_records_returns_30(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6} for _ in range(5)]
+    def test_group_record_30pts_soma_direto(self):
+        records = [{"clan": "CLÃ 1", "pontos": 30}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_period_clan_totals(INICIO, FIM)
         assert result["CLÃ 1"] == 30
 
-    def test_6_records_36pts_floors_to_30(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6} for _ in range(6)]
+    def test_multiplos_registros_de_grupo_somam_direto(self):
+        records = [{"clan": "CLÃ 1", "pontos": 30} for _ in range(3)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_period_clan_totals(INICIO, FIM)
-        assert result["CLÃ 1"] == 30
-
-    def test_10_records_two_batches_returns_60(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6} for _ in range(10)]
-        with patch("supabase_client._get_client", return_value=_mock_client(records)):
-            result = supabase_client.get_period_clan_totals(INICIO, FIM)
-        assert result["CLÃ 1"] == 60
+        assert result["CLÃ 1"] == 90
 
     def test_individual_30pts_preserved(self):
         records = [{"clan": "CLÃ 1", "pontos": 30}]
@@ -66,43 +50,32 @@ class TestGetPeriodClanTotalsFloor:
             result = supabase_client.get_period_clan_totals(INICIO, FIM)
         assert result["CLÃ 1"] == 10
 
-    def test_individual_plus_partial_group_preserves_individual(self):
-        """30 (individual) + 6 (partial group) → 30 (grupo ignorado)"""
+    def test_individual_mais_grupo_somam(self):
+        """30 (individual) + 30 (grupo) = 60"""
         records = [
             {"clan": "CLÃ 1", "pontos": 30},
-            {"clan": "CLÃ 1", "pontos": 6},
+            {"clan": "CLÃ 1", "pontos": 30},
         ]
-        with patch("supabase_client._get_client", return_value=_mock_client(records)):
-            result = supabase_client.get_period_clan_totals(INICIO, FIM)
-        assert result["CLÃ 1"] == 30
-
-    def test_individual_plus_full_group_batch(self):
-        """30 (individual) + 30 (lote completo) = 60"""
-        records = [{"clan": "CLÃ 1", "pontos": 30}] + [{"clan": "CLÃ 1", "pontos": 6} for _ in range(5)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_period_clan_totals(INICIO, FIM)
         assert result["CLÃ 1"] == 60
 
 
-class TestGetPeriodCoachTotalsFloor:
+class TestGetPeriodCoachTotalsSemFloor:
+    """Coaching em grupo/Empresa vale 30 pontos fixos por registro no eixo
+    coach também — sem lote de pessoas, sem flooragem."""
 
-    def test_partial_group_6pts_returns_zero(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6}]
-        with patch("supabase_client._get_client", return_value=_mock_client(records)):
-            result = supabase_client.get_period_coach_totals(INICIO, FIM)
-        assert result.get("Coach A", 0) == 0
-
-    def test_full_batch_5_records_returns_30(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6} for _ in range(5)]
+    def test_group_record_30pts_soma_direto(self):
+        records = [{"coach": "Coach A", "pontos_coach": 30}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_period_coach_totals(INICIO, FIM)
         assert result["Coach A"] == 30
 
-    def test_6_records_floors_to_30(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6} for _ in range(6)]
+    def test_multiplos_registros_de_grupo_somam_direto(self):
+        records = [{"coach": "Coach A", "pontos_coach": 30} for _ in range(3)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_period_coach_totals(INICIO, FIM)
-        assert result["Coach A"] == 30
+        assert result["Coach A"] == 90
 
     def test_individual_30pts_preserved(self):
         records = [{"coach": "Coach A", "pontos_coach": 30}]
@@ -111,31 +84,25 @@ class TestGetPeriodCoachTotalsFloor:
         assert result["Coach A"] == 30
 
     def test_null_coach_ignored(self):
-        records = [{"coach": None, "pontos_coach": 6}]
+        records = [{"coach": None, "pontos_coach": 30}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_period_coach_totals(INICIO, FIM)
         assert result == {}
 
 
-class TestGetTipoClanTotalsFloor:
+class TestGetTipoClanTotalsSemFloor:
 
-    def test_pagante_partial_group_returns_zero(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6, "modalidade": "Coaching em grupo"}]
-        with patch("supabase_client._get_client", return_value=_mock_client(records)):
-            result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
-        assert result.get("CLÃ 1", 0) == 0
-
-    def test_pagante_full_batch_returns_30(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6, "modalidade": "Coaching em grupo"} for _ in range(5)]
+    def test_pagante_group_record_30pts_soma_direto(self):
+        records = [{"clan": "CLÃ 1", "pontos": 30, "modalidade": "Coaching em grupo"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
         assert result["CLÃ 1"] == 30
 
-    def test_pagante_36pts_floors_to_30(self):
-        records = [{"clan": "CLÃ 1", "pontos": 6, "modalidade": "Coaching em grupo"} for _ in range(6)]
+    def test_pagante_multiplos_registros_de_grupo_somam(self):
+        records = [{"clan": "CLÃ 1", "pontos": 30, "modalidade": "Coaching em grupo"} for _ in range(3)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_clan_totals("pagante", INICIO, FIM)
-        assert result["CLÃ 1"] == 30
+        assert result["CLÃ 1"] == 90
 
     def test_pro_bono_10pts_not_floored(self):
         records = [{"clan": "CLÃ 1", "pontos": 10, "modalidade": "Pro-bono"}]
@@ -162,25 +129,19 @@ class TestGetTipoClanTotalsFloor:
         assert result.get("CLÃ 1", 0) == 0
 
 
-class TestGetTipoCoachTotalsFloor:
+class TestGetTipoCoachTotalsSemFloor:
 
-    def test_pagante_partial_group_returns_zero(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6, "modalidade": "Coaching em grupo"}]
-        with patch("supabase_client._get_client", return_value=_mock_client(records)):
-            result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
-        assert result.get("Coach A", 0) == 0
-
-    def test_pagante_full_batch_returns_30(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6, "modalidade": "Coaching em grupo"} for _ in range(5)]
+    def test_pagante_group_record_30pts_soma_direto(self):
+        records = [{"coach": "Coach A", "pontos_coach": 30, "modalidade": "Coaching em grupo"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
         assert result["Coach A"] == 30
 
-    def test_pagante_36pts_floors_to_30(self):
-        records = [{"coach": "Coach A", "pontos_coach": 6, "modalidade": "Coaching em grupo"} for _ in range(6)]
+    def test_pagante_multiplos_registros_de_grupo_somam(self):
+        records = [{"coach": "Coach A", "pontos_coach": 30, "modalidade": "Coaching em grupo"} for _ in range(3)]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
-        assert result["Coach A"] == 30
+        assert result["Coach A"] == 90
 
     def test_pagante_individual_30pts_preserved(self):
         records = [{"coach": "Coach A", "pontos_coach": 30, "modalidade": "Coaching Individual"}]
@@ -189,7 +150,7 @@ class TestGetTipoCoachTotalsFloor:
         assert result["Coach A"] == 30
 
     def test_null_coach_ignored(self):
-        records = [{"coach": None, "pontos_coach": 6, "modalidade": "Coaching em grupo"}]
+        records = [{"coach": None, "pontos_coach": 30, "modalidade": "Coaching em grupo"}]
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pagante", INICIO, FIM)
         assert result == {}
@@ -205,49 +166,6 @@ class TestGetTipoCoachTotalsFloor:
         with patch("supabase_client._get_client", return_value=_mock_client(records)):
             result = supabase_client.get_tipo_coach_totals("pro_bono", INICIO, FIM)
         assert result["Coach A"] == 10
-
-
-def _mock_active_counted_paged(rows):
-    """Mock paginado de `fetch_active_counted_desafio_submissions`: uma
-    página com `rows`, depois uma página vazia (fim da varredura)."""
-    calls = {"n": 0}
-    chain = MagicMock()
-    for m in ("table", "select", "eq", "order", "range"):
-        getattr(chain, m).return_value = chain
-
-    def _execute():
-        calls["n"] += 1
-        result = MagicMock()
-        result.data = rows if calls["n"] == 1 else []
-        return result
-
-    chain.execute.side_effect = _execute
-    client = MagicMock()
-    client.table.return_value = chain
-    return client
-
-
-class TestGetTipoClanTotalsDesafiosNaoAplicaFloor:
-    """Pontos de desafio (tokens `active_counted`) não passam pela lógica de
-    lote/floor de pagante/pro_bono: `points` de cada token entra somado como
-    veio, sem arredondar para baixo em múltiplos de `POINTS_PER_BATCH_GROUP`
-    (issue #19 / Task 8)."""
-
-    def test_pontos_de_desafio_nao_sao_agrupados_em_lotes(self):
-        # 6 pts é justamente o valor que, em pagante/pro_bono, o floor de lote
-        # zeraria por não completar um grupo — aqui não há floor: entra como 6.
-        rows = [
-            {
-                "clan": "CLÃ 1",
-                "points": 6,
-                "status": "active_counted",
-                "submitted_at": "2026-01-15T12:00:00+00:00",
-            },
-        ]
-        client = _mock_active_counted_paged(rows)
-        with patch("supabase_client._get_client", return_value=client):
-            result = supabase_client.get_tipo_clan_totals("desafios", INICIO, FIM)
-        assert result["CLÃ 1"] == 6
 
 
 class TestGetPeriodDesafioCoachTotals:

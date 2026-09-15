@@ -35,8 +35,6 @@ class TestReprocessarCoachesMergeERecalcula:
              patch("supabase_client.update_registros_coach", return_value=1) as mock_update, \
              patch("supabase_client.delete_coach_total") as mock_delete, \
              patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert, \
-             patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
-             patch("supabase_client.get_coach_carry_over", return_value=0), \
              patch("supabase_client.get_all_desafio_token_coach_names", return_value=set()), \
              patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.list_coach_totals", return_value=[
@@ -103,8 +101,6 @@ class TestReprocessarCoachesMergeERecalcula:
                    return_value={"Vinicius Marini": 20}), \
              patch("supabase_client.update_registros_coach", return_value=0), \
              patch("supabase_client.delete_coach_total"), \
-             patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
-             patch("supabase_client.get_coach_carry_over", return_value=0), \
              patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert:
             resultado = reprocessar_coaches()
 
@@ -129,8 +125,6 @@ class TestReprocessarCoachesMergeERecalcula:
              patch("supabase_client.get_tipo_coach_totals", return_value={"Vivian Gaspar Canonico": 10}), \
              patch("supabase_client.update_registros_coach", return_value=1), \
              patch("supabase_client.delete_coach_total"), \
-             patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
-             patch("supabase_client.get_coach_carry_over", return_value=0), \
              patch("supabase_client.upsert_coach_total", return_value={}) as mock_upsert:
             resultado = reprocessar_coaches()
 

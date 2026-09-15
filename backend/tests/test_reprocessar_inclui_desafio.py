@@ -15,8 +15,6 @@ class TestReprocessarContabilidadeIncluiDesafio:
              patch("supabase_client.delete_all_registros", return_value=0), \
              patch("supabase_client.reset_all_totals", return_value=None), \
              patch("supabase_client.get_coach_alias_map", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
              patch("google_sheets_client.fetch_records_pro_bono", return_value=None), \
              patch("supabase_client.get_tipo_clan_totals", return_value={"CLÃ 5": 40}) as mock_tipo_clan, \
              patch("supabase_client.get_tipo_coach_totals", return_value={}), \
@@ -39,7 +37,7 @@ class TestReprocessarContabilidadeIncluiDesafio:
              patch("google_sheets_client.fetch_records_pro_bono", return_value=[]), \
              patch("google_sheets_client.fetch_ranking", return_value=[]), \
              patch("routers.contabilidade._process_group_records",
-                   return_value=(0, {}, {}, {})), \
+                   return_value=(0, {}, {})), \
              patch("routers.contabilidade._process_pro_bono_records",
                    return_value=(0, {}, {})), \
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \

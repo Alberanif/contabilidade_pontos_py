@@ -64,10 +64,9 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 # Pontuação — Coaching Individual
 POINTS_PER_COACHING_INDIVIDUAL = int(os.getenv("POINTS_PER_COACHING_INDIVIDUAL", "30"))
 
-# Pontuação — Coaching em grupo / Coaching em Empresa (lote de 5 = 30 pts)
-BATCH_SIZE_GROUP = int(os.getenv("BATCH_SIZE_GROUP", "5"))
-POINTS_PER_BATCH_GROUP = int(os.getenv("POINTS_PER_BATCH_GROUP", "30"))
-POINTS_PER_RECORD_IN_BATCH = POINTS_PER_BATCH_GROUP // BATCH_SIZE_GROUP  # = 6
+# Pontuação — Coaching em grupo / Coaching em Empresa: 30 pontos fixos por
+# registro, igual ao Coaching Individual (POINTS_PER_COACHING_INDIVIDUAL) —
+# sem lote de pessoas atendidas.
 GROUP_MODALIDADES = [
     "Coaching em grupo",
     "Coaching em Empresa (contrato corporativo)",

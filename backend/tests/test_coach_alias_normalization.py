@@ -81,26 +81,6 @@ class TestBuildAndInsertProBonoNormalizesCoach:
         assert inserted[0]["coach"] == "Tatiane Pellicel"
 
 
-from routers.contabilidade import aprovar_coach, AprovarCoachRequest
-
-
-class TestAprovarCoachResolveAlias:
-
-    def test_aprovar_com_alias_busca_fila_do_canonico(self):
-        with patch("supabase_client.get_coach_alias_map",
-                    return_value={"Vini Marini": "Vinicius Marini"}), \
-             patch("supabase_client.get_pending_group_records_by_coach",
-                   return_value=[]) as mock_pending, \
-             patch("supabase_client.get_coach_carry_over", return_value=0), \
-             patch("supabase_client.list_coach_totals", return_value=[]), \
-             patch("supabase_client.upsert_coach_total", return_value={}):
-            aprovar_coach(AprovarCoachRequest(coach="Vini Marini"))
-
-        mock_pending.assert_called_once()
-        args, _ = mock_pending.call_args
-        assert args[0] == "Vinicius Marini"
-
-
 from routers.contabilidade import _process_pro_bono_records
 
 
@@ -125,11 +105,12 @@ class TestProcessProBonoMergesCoach:
 from routers.contabilidade import importar_inicial
 
 
-class TestImportarInicialMergeCoachBatch:
+class TestImportarInicialMergeCoachGroup:
 
-    def test_dois_alias_juntos_fecham_lote(self):
-        # Cada linha tem 3 participantes; separados não fecham lote de 5,
-        # juntos (6 pessoas) fecham 1 lote completo.
+    def test_dois_alias_do_mesmo_coach_ficam_contabilizados(self):
+        # Grupo/Empresa é contabilizado imediatamente (30 pts fixos, sem
+        # lote de pessoas): os dois registros de aliases do mesmo coach
+        # canônico ficam contabilizados independentemente um do outro.
         # COL_CLAN=0, COL_COACH=1, COL_MODALIDADE=5, COL_PARTICIPANTES=8,
         # COL_DATE_PAYING=10, KEY_COLUMNS=[11]
         row_a = ["1", "Vini Marini", "", "", "", "Coaching em grupo", "", "", "3", "", "01/03/2026", "keyA"]
@@ -153,12 +134,11 @@ class TestImportarInicialMergeCoachBatch:
              patch("supabase_client.get_tipo_clan_totals", return_value={}), \
              patch("supabase_client.get_tipo_coach_totals", return_value={}), \
              patch("supabase_client.upsert_clan_total", return_value={}), \
-             patch("supabase_client.upsert_coach_total", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]):
+             patch("supabase_client.upsert_coach_total", return_value={}):
             importar_inicial()
 
         grupo = [r for r in inserted if r.get("modalidade") == "Coaching em grupo"]
         assert len(grupo) == 2
         assert all(r["status_coach"] == "contabilizado" for r in grupo)
+        assert all(r["pontos_coach"] == 30 for r in grupo)
         assert all(r["coach"] == "Vinicius Marini" for r in grupo)

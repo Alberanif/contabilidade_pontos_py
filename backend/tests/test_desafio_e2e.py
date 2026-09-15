@@ -364,8 +364,6 @@ class TestCriteriosDeAceitacaoPRD11:
              patch("google_sheets_client.fetch_records_pro_bono", return_value=None), \
              patch("supabase_client.get_processed_hashes", return_value=set()), \
              patch("supabase_client.get_coach_alias_map", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]), \
              patch("supabase_client.fetch_active_counted_desafio_submissions",
                    return_value=active_tokens), \
              patch("supabase_client.list_coach_totals", return_value=coach_totals_before), \

@@ -1,8 +1,15 @@
-"""Testes da issue #19 (Task 8): totais de clã por `desafios` derivados de
-`desafio_submissions_current`, agrupados por `submitted_at` convertido para
-América/São_Paulo — em vez do período/`contabilizar_pontos` do desafio legado
-(`desafios` + `desafio_registros`), que o lado coach continua usando (issue
-#17 / Task 6, fora de escopo aqui).
+"""Testes da issue #19 (Task 8) e #44: totais por `desafios`.
+
+Eixo coach (`get_tipo_coach_totals`/`get_period_desafio_coach_totals`):
+derivados de `desafio_submissions_current`, agrupados por `submitted_at`
+convertido para América/São_Paulo — inalterado desde a issue #19/Task 8.
+
+Eixo clã (`get_tipo_clan_totals("desafios")`/`get_period_desafio_totals`):
+desde a issue #44, somam a apuração por percentual já fechada
+(`desafio_clan_apuracoes`) dos desafios apurados, agrupada pelo
+`prazo_apuracao` do desafio — não mais a soma flat por token, já que a
+apuração por percentual vale para o desafio inteiro, não é atribuível por
+submissão individual.
 """
 
 import os
@@ -141,211 +148,161 @@ class TestSubmittedAtLocalDate:
 
 
 # ---------------------------------------------------------------------------
-# get_tipo_clan_totals("desafios") sem data: soma tudo que está active_counted
+# get_tipo_clan_totals("desafios") sem data: soma a apuração por percentual
+# já fechada (`desafio_clan_apuracoes`) de todos os desafios apurados (issue
+# #44) — não mais soma flat por token: a apuração por percentual vale para o
+# desafio inteiro, não é atribuível por submissão individual.
 # ---------------------------------------------------------------------------
+
+
+def _desafio(desafio_id, apurado_em="2026-09-01T00:00:00+00:00", prazo_apuracao=None):
+    return {"id": desafio_id, "apurado_em": apurado_em, "prazo_apuracao": prazo_apuracao}
+
+
+def _apuracao_row(clan, pontos):
+    return {"clan": clan, "pontos": pontos}
 
 
 class TestGetTipoClanTotalsDesafiosNoDate:
 
-    def test_soma_pontos_ativos_agrupados_por_cla(self):
-        rows = [
-            _row("CLÃ 1", 10, "2026-05-01T12:00:00+00:00"),
-            _row("CLÃ 1", 5, "2026-06-01T12:00:00+00:00"),
-            _row("CLÃ 2", 7, "2026-01-01T12:00:00+00:00"),
-        ]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
+    def test_soma_apuracao_de_todos_os_desafios_apurados_agrupada_por_cla(self):
+        with patch("supabase_client.list_desafios", return_value=[_desafio(1), _desafio(2)]), \
+             patch("supabase_client.get_desafio_clan_apuracoes", side_effect=[
+                 [_apuracao_row("CLÃ 1", 10), _apuracao_row("CLÃ 1", 5)],
+                 [_apuracao_row("CLÃ 2", 7)],
+             ]):
             result = supabase_client.get_tipo_clan_totals("desafios")
         assert result == {"CLÃ 1": 15, "CLÃ 2": 7}
 
-    def test_sem_tokens_ativos_retorna_vazio(self):
-        client, _ = _single_page_client([])
-        with patch.object(supabase_client, "_get_client", return_value=client):
+    def test_sem_desafios_apurados_retorna_vazio(self):
+        with patch("supabase_client.list_desafios", return_value=[]):
             result = supabase_client.get_tipo_clan_totals("desafios")
         assert result == {}
 
-    def test_nao_ha_filtro_contabilizar_pontos_nem_join_com_desafios(self):
-        """A tabela legada `desafios` não deve mais ser consultada por este
-        caminho: o único portão é o `status='active_counted'` do próprio
-        token, filtrado no servidor por `fetch_active_counted_desafio_submissions`."""
-        rows = [_row("CLÃ 1", 10, "2026-05-01T12:00:00+00:00")]
-        client, eq_calls = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
+    def test_desafio_nao_apurado_e_ignorado(self):
+        with patch("supabase_client.list_desafios",
+                    return_value=[_desafio(1, apurado_em=None)]), \
+             patch("supabase_client.get_desafio_clan_apuracoes") as mock_apuracoes:
             result = supabase_client.get_tipo_clan_totals("desafios")
-        assert result == {"CLÃ 1": 10}
-        assert eq_calls
-        assert all(call == ("status", "active_counted") for call in eq_calls)
+        mock_apuracoes.assert_not_called()
+        assert result == {}
 
 
 # ---------------------------------------------------------------------------
-# get_period_desafio_totals: período é por submitted_at em América/São_Paulo
+# get_period_desafio_totals: período é pelo prazo_apuracao do desafio (issue
+# #44) — não mais por submitted_at de cada token, já que a apuração por
+# percentual vale para o desafio inteiro, não para cada submissão isolada.
 # ---------------------------------------------------------------------------
 
 
-class TestGetPeriodDesafioTotalsTimezoneBoundary:
-    """Virada do dia/mês em América/São_Paulo (UTC-3, sem horário de verão
-    desde 2019): 23:59 local ainda é o dia anterior; 00:01 local já é o
-    próximo. O ponto do Task 8 é que o período é por *token* (submitted_at),
-    não pelo `desafios.data` do desafio inteiro."""
+class TestGetPeriodDesafioTotalsPorPrazoApuracao:
 
-    def test_2359_local_conta_no_dia_anterior_nao_no_seguinte(self):
+    def test_desafio_com_prazo_dentro_do_periodo_conta(self):
         from datetime import date
-        # Local: 2026-05-31 23:59:00-03:00 -> UTC 2026-06-01T02:59:00+00:00
-        rows = [_row("CLÃ 1", 10, "2026-06-01T02:59:00+00:00")]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            maio = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-            junho = supabase_client.get_period_desafio_totals(date(2026, 6, 1), date(2026, 6, 30))
-        assert maio == {"CLÃ 1": 10}
-        assert junho == {}
+        with patch("supabase_client.list_desafios",
+                    return_value=[_desafio(1, prazo_apuracao="2026-08-31T11:38:00+00:00")]), \
+             patch("supabase_client.get_desafio_clan_apuracoes",
+                   return_value=[_apuracao_row("CLÃ 1", 500)]):
+            result = supabase_client.get_period_desafio_totals(date(2026, 8, 1), date(2026, 8, 31))
+        assert result == {"CLÃ 1": 500}
 
-    def test_0001_local_conta_no_dia_seguinte_nao_no_anterior(self):
+    def test_desafio_com_prazo_fora_do_periodo_nao_conta(self):
         from datetime import date
-        # Local: 2026-06-01 00:01:00-03:00 -> UTC 2026-06-01T03:01:00+00:00
-        rows = [_row("CLÃ 1", 10, "2026-06-01T03:01:00+00:00")]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            maio = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-            junho = supabase_client.get_period_desafio_totals(date(2026, 6, 1), date(2026, 6, 30))
-        assert maio == {}
-        assert junho == {"CLÃ 1": 10}
+        with patch("supabase_client.list_desafios",
+                    return_value=[_desafio(1, prazo_apuracao="2026-09-10T11:38:00+00:00")]), \
+             patch("supabase_client.get_desafio_clan_apuracoes",
+                   return_value=[_apuracao_row("CLÃ 1", 500)]):
+            result = supabase_client.get_period_desafio_totals(date(2026, 8, 1), date(2026, 8, 31))
+        assert result == {}
 
-    def test_virada_de_dia_dentro_do_mesmo_mes(self):
+    def test_desafio_nao_apurado_nao_conta_mesmo_com_prazo_no_periodo(self):
         from datetime import date
-        # Local: 2026-05-14 23:59:00-03:00 -> UTC 2026-05-15T02:59:00+00:00
-        # Local: 2026-05-15 00:01:00-03:00 -> UTC 2026-05-15T03:01:00+00:00
-        rows = [
-            _row("CLÃ 1", 3, "2026-05-15T02:59:00+00:00", token="TOK-DIA-14"),
-            _row("CLÃ 1", 4, "2026-05-15T03:01:00+00:00", token="TOK-DIA-15"),
-        ]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            dia14 = supabase_client.get_period_desafio_totals(date(2026, 5, 14), date(2026, 5, 14))
-            dia15 = supabase_client.get_period_desafio_totals(date(2026, 5, 15), date(2026, 5, 15))
-        assert dia14 == {"CLÃ 1": 3}
-        assert dia15 == {"CLÃ 1": 4}
+        with patch("supabase_client.list_desafios", return_value=[
+                 _desafio(1, apurado_em=None, prazo_apuracao="2026-08-31T11:38:00+00:00"),
+             ]), \
+             patch("supabase_client.get_desafio_clan_apuracoes") as mock_apuracoes:
+            result = supabase_client.get_period_desafio_totals(date(2026, 8, 1), date(2026, 8, 31))
+        mock_apuracoes.assert_not_called()
+        assert result == {}
 
-    def test_dentro_do_periodo_incluido_nas_bordas_inicio_e_fim(self):
+    def test_desafio_sem_prazo_definido_nao_conta_em_nenhum_periodo(self):
         from datetime import date
-        rows = [
-            _row("CLÃ 1", 1, "2026-05-01T15:00:00+00:00", token="TOK-A"),  # 12:00 local, dia 1
-            _row("CLÃ 1", 2, "2026-05-31T15:00:00+00:00", token="TOK-B"),  # 12:00 local, dia 31
-        ]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            result = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
+        with patch("supabase_client.list_desafios",
+                    return_value=[_desafio(1, prazo_apuracao=None)]), \
+             patch("supabase_client.get_desafio_clan_apuracoes",
+                   return_value=[_apuracao_row("CLÃ 1", 500)]):
+            result = supabase_client.get_period_desafio_totals(date(2026, 8, 1), date(2026, 8, 31))
+        assert result == {}
+
+    def test_prazo_incluido_nas_bordas_inicio_e_fim(self):
+        from datetime import date
+        with patch("supabase_client.list_desafios", return_value=[
+                 _desafio(1, prazo_apuracao="2026-08-01T15:00:00+00:00"),
+                 _desafio(2, prazo_apuracao="2026-08-31T15:00:00+00:00"),
+             ]), \
+             patch("supabase_client.get_desafio_clan_apuracoes", side_effect=[
+                 [_apuracao_row("CLÃ 1", 1)],
+                 [_apuracao_row("CLÃ 1", 2)],
+             ]):
+            result = supabase_client.get_period_desafio_totals(date(2026, 8, 1), date(2026, 8, 31))
         assert result == {"CLÃ 1": 3}
 
-
-class TestGetPeriodDesafioTotalsAggregation:
-
-    def test_soma_por_cla_dentro_do_periodo(self):
+    def test_soma_varios_desafios_apurados_no_periodo_por_cla(self):
         from datetime import date
-        rows = [
-            _row("CLÃ 1", 10, "2026-05-10T12:00:00+00:00"),
-            _row("CLÃ 1", 5, "2026-05-20T12:00:00+00:00"),
-            _row("CLÃ 2", 7, "2026-05-15T12:00:00+00:00"),
-        ]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            result = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
+        with patch("supabase_client.list_desafios", return_value=[
+                 _desafio(1, prazo_apuracao="2026-08-10T12:00:00+00:00"),
+                 _desafio(2, prazo_apuracao="2026-08-20T12:00:00+00:00"),
+             ]), \
+             patch("supabase_client.get_desafio_clan_apuracoes", side_effect=[
+                 [_apuracao_row("CLÃ 1", 10)],
+                 [_apuracao_row("CLÃ 1", 5), _apuracao_row("CLÃ 2", 7)],
+             ]):
+            result = supabase_client.get_period_desafio_totals(date(2026, 8, 1), date(2026, 8, 31))
         assert result == {"CLÃ 1": 15, "CLÃ 2": 7}
 
-    def test_token_sem_clan_e_ignorado(self):
+    def test_desafio_com_prazo_antes_do_inicio_do_periodo_conta(self):
+        """Issue #49/#50: um desafio já apurado conta de forma cumulativa a
+        partir do seu encerramento — um filtro cujo `inicio` é posterior ao
+        `prazo_apuracao` não deve mais excluí-lo."""
         from datetime import date
-        rows = [_row(None, 10, "2026-05-10T12:00:00+00:00")]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            result = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-        assert result == {}
+        with patch("supabase_client.list_desafios",
+                    return_value=[_desafio(1, prazo_apuracao="2026-08-31T11:38:00+00:00")]), \
+             patch("supabase_client.get_desafio_clan_apuracoes",
+                   return_value=[_apuracao_row("CLÃ 1", 500)]):
+            result = supabase_client.get_period_desafio_totals(date(2026, 9, 1), date(2026, 9, 30))
+        assert result == {"CLÃ 1": 500}
 
-    def test_sem_tokens_no_periodo_retorna_vazio(self):
+    def test_desafio_com_prazo_antes_do_inicio_sem_fim_conta(self):
         from datetime import date
-        rows = [_row("CLÃ 1", 10, "2026-01-01T12:00:00+00:00")]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            result = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-        assert result == {}
+        with patch("supabase_client.list_desafios",
+                    return_value=[_desafio(1, prazo_apuracao="2026-08-31T11:38:00+00:00")]), \
+             patch("supabase_client.get_desafio_clan_apuracoes",
+                   return_value=[_apuracao_row("CLÃ 1", 500)]):
+            result = supabase_client.get_period_desafio_totals(date(2026, 9, 1))
+        assert result == {"CLÃ 1": 500}
 
 
 # ---------------------------------------------------------------------------
-# Correção retroativa: o relatório reflete o estado *atual* do token, não um
-# instantâneo histórico imutável.
+# A apuração persistida em `desafio_clan_apuracoes` é sempre lida em tempo
+# real — uma reapuração (ex.: correção de revisão de submissão, ou fechamento
+# tardio) muda o resultado na próxima leitura, sem exigir nenhuma invalidação
+# nem cache.
 # ---------------------------------------------------------------------------
 
 
-class TestCorrecaoRetroativaMoveOuRemoveContribuicao:
+class TestApuracaoRefletidaEmTempoReal:
 
-    def test_mudanca_de_cla_move_a_contribuicao_entre_clas(self):
-        from datetime import date
-        before = [_row("CLÃ 1", 10, "2026-05-10T12:00:00+00:00", token="TOK-X")]
-        after = [_row("CLÃ 2", 10, "2026-05-10T12:00:00+00:00", token="TOK-X")]
-
-        with patch(
-            "supabase_client.fetch_active_counted_desafio_submissions",
-            side_effect=[before, after],
-        ):
-            primeiro = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-            segundo = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-
-        assert primeiro == {"CLÃ 1": 10}
-        assert segundo == {"CLÃ 2": 10}
-
-    def test_mudanca_de_data_move_a_contribuicao_entre_periodos(self):
-        from datetime import date
-        # Corrigido de maio para junho.
-        before = [_row("CLÃ 1", 10, "2026-05-10T12:00:00+00:00", token="TOK-X")]
-        after = [_row("CLÃ 1", 10, "2026-06-10T12:00:00+00:00", token="TOK-X")]
-
-        with patch(
-            "supabase_client.fetch_active_counted_desafio_submissions",
-            side_effect=[before, after, before, after],
-        ):
-            maio_antes = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-            maio_depois = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-        with patch(
-            "supabase_client.fetch_active_counted_desafio_submissions",
-            side_effect=[before, after],
-        ):
-            junho_antes = supabase_client.get_period_desafio_totals(date(2026, 6, 1), date(2026, 6, 30))
-            junho_depois = supabase_client.get_period_desafio_totals(date(2026, 6, 1), date(2026, 6, 30))
-
-        assert maio_antes == {"CLÃ 1": 10}
-        assert maio_depois == {}
-        assert junho_antes == {}
-        assert junho_depois == {"CLÃ 1": 10}
-
-    def test_token_deixa_de_ser_active_counted_remove_a_contribuicao(self):
-        """Uma mudança de validação (deixa de ser 'Sim') retira o token do
-        conjunto que `fetch_active_counted_desafio_submissions` devolve — o
-        filtro `status='active_counted'` é feito no servidor."""
-        from datetime import date
-        before = [_row("CLÃ 1", 10, "2026-05-10T12:00:00+00:00", token="TOK-X")]
-        after = []  # token não é mais active_counted: some da leitura server-side
-
-        with patch(
-            "supabase_client.fetch_active_counted_desafio_submissions",
-            side_effect=[before, after],
-        ):
-            primeiro = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-            segundo = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-
-        assert primeiro == {"CLÃ 1": 10}
-        assert segundo == {}
-
-    def test_mesma_correcao_retroativa_no_no_date_branch_de_get_tipo_clan_totals(self):
-        before = [_row("CLÃ 1", 10, "2026-05-10T12:00:00+00:00", token="TOK-X")]
-        after = [_row("CLÃ 2", 10, "2026-05-10T12:00:00+00:00", token="TOK-X")]
-
-        with patch(
-            "supabase_client.fetch_active_counted_desafio_submissions",
-            side_effect=[before, after],
-        ):
+    def test_mudanca_na_apuracao_persistida_reflete_na_proxima_leitura(self):
+        with patch("supabase_client.list_desafios", return_value=[_desafio(1)]), \
+             patch("supabase_client.get_desafio_clan_apuracoes", side_effect=[
+                 [_apuracao_row("CLÃ 1", 500)],
+                 [_apuracao_row("CLÃ 1", 300)],
+             ]):
             primeiro = supabase_client.get_tipo_clan_totals("desafios")
             segundo = supabase_client.get_tipo_clan_totals("desafios")
 
-        assert primeiro == {"CLÃ 1": 10}
-        assert segundo == {"CLÃ 2": 10}
+        assert primeiro == {"CLÃ 1": 500}
+        assert segundo == {"CLÃ 1": 300}
 
 
 # ---------------------------------------------------------------------------
@@ -497,32 +454,6 @@ class TestGetAllDesafioTokenCoachNames:
 # Step 5 (proxy no sandbox): a agregação Python é internamente consistente —
 # soma-por-clã bate com um cálculo manual sobre a mesma fixture.
 # ---------------------------------------------------------------------------
-
-
-class TestConsistenciaInternaDaAgregacao:
-
-    def test_soma_por_cla_bate_com_calculo_manual_da_mesma_fixture(self):
-        from datetime import date
-        rows = [
-            _row("CLÃ 1", 10, "2026-05-01T12:00:00+00:00"),
-            _row("CLÃ 1", 5, "2026-05-02T12:00:00+00:00"),
-            _row("CLÃ 2", 7, "2026-05-03T12:00:00+00:00"),
-            _row("CLÃ 3", 100, "2026-01-01T12:00:00+00:00"),  # fora do período
-        ]
-        client, _ = _single_page_client(rows)
-        with patch.object(supabase_client, "_get_client", return_value=client):
-            result = supabase_client.get_period_desafio_totals(date(2026, 5, 1), date(2026, 5, 31))
-
-        manual: dict[str, int] = {}
-        for r in rows:
-            local_date = supabase_client._submitted_at_local_date(r["submitted_at"])
-            if local_date is not None and date(2026, 5, 1) <= local_date <= date(2026, 5, 31):
-                manual[r["clan"]] = manual.get(r["clan"], 0) + r["points"]
-
-        assert result == manual == {"CLÃ 1": 15, "CLÃ 2": 7}
-        assert sum(result.values()) == sum(
-            r["points"] for r in rows if r["clan"] != "CLÃ 3"
-        )
 
 
 # ---------------------------------------------------------------------------

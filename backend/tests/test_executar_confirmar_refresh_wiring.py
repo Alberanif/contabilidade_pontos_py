@@ -47,9 +47,7 @@ class TestExecutarRefreshWiring:
              patch("google_sheets_client.fetch_records", return_value=[["h"]]), \
              patch("google_sheets_client.fetch_records_pro_bono", return_value=None), \
              patch("supabase_client.get_processed_hashes", return_value=set()), \
-             patch("supabase_client.get_coach_alias_map", return_value={}), \
-             patch("supabase_client.get_all_pending_clans", return_value=[]), \
-             patch("supabase_client.get_all_pending_coaches", return_value=[]):
+             patch("supabase_client.get_coach_alias_map", return_value={}):
             response = executar_contabilidade()
         return response, mock_refresh
 

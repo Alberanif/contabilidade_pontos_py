@@ -189,6 +189,29 @@ def update_registros_coach(old_coach: str, new_coach: str) -> int:
     return len(result.data)
 
 
+def apply_grupo_flat_correction(record_ids: list[int], pontos_flat: int) -> int:
+    """Corrige registros de Coaching em grupo/Empresa presos no antigo
+    esquema de lote (issue #42) — define `pontos`/`status` e
+    `pontos_coach`/`status_coach` para o valor flat atual nos dois eixos de
+    uma vez. Não-destrutivo: só toca os `record_ids` informados (ver
+    `points_engine.get_ids_needing_grupo_correction`)."""
+    if not record_ids:
+        return 0
+    client = _get_client()
+    result = (
+        client.table(TABLE_REGISTROS)
+        .update({
+            "pontos": pontos_flat,
+            "status": "contabilizado",
+            "pontos_coach": pontos_flat,
+            "status_coach": "contabilizado",
+        })
+        .in_("id", record_ids)
+        .execute()
+    )
+    return len(result.data)
+
+
 def update_data_registro(registro_hash: str, data_registro: str | None) -> bool:
     """Atualiza data_registro de um registro pelo hash. Retorna True se encontrou o registro."""
     client = _get_client()
@@ -199,89 +222,6 @@ def update_data_registro(registro_hash: str, data_registro: str | None) -> bool:
         .execute()
     )
     return len(result.data) > 0
-
-
-# --- Fila de grupo / empresa ---
-
-
-def get_pending_group_records_by_clan(clan: str, modalidades: list[str]) -> list[dict]:
-    """Retorna todos os registros pendentes de grupo/empresa do clã em ordem FIFO (created_at ASC)."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_REGISTROS)
-        .select("id, registro_hash, clan, modalidade, created_at, num_participantes")
-        .eq("clan", clan)
-        .eq("status", "pendente")
-        .in_("modalidade", modalidades)
-        .order("created_at", desc=False)
-        .execute()
-    )
-    return result.data
-
-
-def promote_pending_to_contabilizado(record_ids: list[int], pontos_each: int) -> int:
-    """Atualiza os registros para status=contabilizado e define pontos. Retorna quantidade."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_REGISTROS)
-        .update({"status": "contabilizado", "pontos": pontos_each})
-        .in_("id", record_ids)
-        .execute()
-    )
-    return len(result.data)
-
-
-def get_all_pending_clans(modalidades: list[str]) -> list[str]:
-    """Retorna lista de clãs distintos que possuem ao menos 1 registro pendente nas modalidades."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_REGISTROS)
-        .select("clan")
-        .eq("status", "pendente")
-        .in_("modalidade", modalidades)
-        .execute()
-    )
-    return list({row["clan"] for row in result.data if row.get("clan")})
-
-
-def get_pending_group_records_by_coach(coach: str, modalidades: list[str]) -> list[dict]:
-    """Retorna todos os registros pendentes de grupo/empresa do coach em ordem FIFO."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_REGISTROS)
-        .select("id, registro_hash, coach, clan, modalidade, created_at, num_participantes")
-        .eq("coach", coach)
-        .eq("status_coach", "pendente")
-        .in_("modalidade", modalidades)
-        .order("created_at", desc=False)
-        .execute()
-    )
-    return result.data
-
-
-def promote_pending_to_contabilizado_coach(record_ids: list[int], pontos_each: int) -> int:
-    """Atualiza os registros para status_coach=contabilizado e define pontos_coach. Retorna quantidade."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_REGISTROS)
-        .update({"status_coach": "contabilizado", "pontos_coach": pontos_each})
-        .in_("id", record_ids)
-        .execute()
-    )
-    return len(result.data)
-
-
-def get_all_pending_coaches(modalidades: list[str]) -> list[str]:
-    """Retorna lista de coaches distintos que possuem ao menos 1 registro pendente nas modalidades."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_REGISTROS)
-        .select("coach")
-        .eq("status_coach", "pendente")
-        .in_("modalidade", modalidades)
-        .execute()
-    )
-    return list({row["coach"] for row in result.data if row.get("coach")})
 
 
 # --- Totais por clã ---
@@ -326,18 +266,6 @@ def upsert_clan_total(
         on_conflict="clan",
     ).execute()
     return result.data[0] if result.data else {}
-
-
-def get_clan_carry_over(clan: str) -> int:
-    """Retorna o carry-over (pessoas_em_espera) atual do clã. Default 0."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_TOTAIS)
-        .select("pessoas_em_espera")
-        .eq("clan", clan)
-        .execute()
-    )
-    return result.data[0]["pessoas_em_espera"] or 0 if result.data else 0
 
 
 def reset_all_totals() -> None:
@@ -389,18 +317,6 @@ def upsert_coach_total(
         on_conflict="coach",
     ).execute()
     return result.data[0] if result.data else {}
-
-
-def get_coach_carry_over(coach: str) -> int:
-    """Retorna o carry-over (pessoas_em_espera) atual do coach. Default 0."""
-    client = _get_client()
-    result = (
-        client.table(TABLE_TOTAIS_COACH)
-        .select("pessoas_em_espera")
-        .eq("coach", coach)
-        .execute()
-    )
-    return result.data[0]["pessoas_em_espera"] or 0 if result.data else 0
 
 
 def delete_coach_total(coach: str) -> None:
@@ -1168,8 +1084,6 @@ def count_desafio_registros_by_desafio() -> dict[int, int]:
 def get_period_clan_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
     Sum all pontos for records within the period [inicio, fim].
-    Group coaching records (pontos == POINTS_PER_RECORD_IN_BATCH) are floored
-    to the nearest complete batch — partial batches are discarded.
     Returns dict[clan_name, total_pontos].
     """
     client = _get_client()
@@ -1183,29 +1097,16 @@ def get_period_clan_totals(inicio: date, fim: date | None = None) -> dict[str, i
         query = query.lte("data_registro", fim.isoformat())
     records = query.execute().data
 
-    group_raw: dict[str, int] = {}
     totals: dict[str, int] = {}
     for record in records:
         clan = record["clan"]
-        p = record["pontos"]
-        if p == config.POINTS_PER_RECORD_IN_BATCH:
-            group_raw[clan] = group_raw.get(clan, 0) + p
-        else:
-            totals[clan] = totals.get(clan, 0) + p
-
-    for clan, g in group_raw.items():
-        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
-        if complete:
-            totals[clan] = totals.get(clan, 0) + complete
-
+        totals[clan] = totals.get(clan, 0) + record["pontos"]
     return totals
 
 
 def get_period_coach_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
     Sum all pontos_coach for records within the period [inicio, fim].
-    Group coaching records (pontos_coach == POINTS_PER_RECORD_IN_BATCH) are floored
-    to the nearest complete batch — partial batches are discarded.
     Returns dict[coach_name, total_pontos_coach].
     """
     client = _get_client()
@@ -1219,48 +1120,55 @@ def get_period_coach_totals(inicio: date, fim: date | None = None) -> dict[str, 
         query = query.lte("data_registro", fim.isoformat())
     records = query.execute().data
 
-    group_raw: dict[str, int] = {}
     totals: dict[str, int] = {}
     for record in records:
         coach = record["coach"]
         if not coach:
             continue
-        p = record["pontos_coach"]
-        if p == config.POINTS_PER_RECORD_IN_BATCH:
-            group_raw[coach] = group_raw.get(coach, 0) + p
-        else:
-            totals[coach] = totals.get(coach, 0) + p
+        totals[coach] = totals.get(coach, 0) + record["pontos_coach"]
+    return totals
 
-    for coach, g in group_raw.items():
-        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
-        if complete:
-            totals[coach] = totals.get(coach, 0) + complete
 
+def _soma_apuracao_por_clan(desafio_ids: list[int]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for desafio_id in desafio_ids:
+        for row in get_desafio_clan_apuracoes(desafio_id):
+            clan = row.get("clan")
+            if not clan:
+                continue
+            totals[clan] = totals.get(clan, 0) + (row.get("pontos") or 0)
     return totals
 
 
 def get_period_desafio_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
     """
-    Sum desafio points per clan from active tokens (`status='active_counted'`
-    in `desafio_submissions_current`) whose `submitted_at`, converted to
-    América/São_Paulo local time and taken as a calendar date, falls within
-    [inicio, fim]. Period membership is per-token, not per-desafio: a
-    correction that moves a token's submitted_at, clan or validation moves or
-    removes its contribution the next time this runs.
+    Soma a apuração por percentual já fechada (`desafio_clan_apuracoes`) dos
+    desafios apurados (`apurado_em` setado) cujo `prazo_apuracao`, convertido
+    para a data de calendário em América/São_Paulo, é `<= fim` (issue #44).
+    A apuração por percentual vale para o desafio inteiro, não é atribuível
+    por submissão individual — diferente do eixo coach
+    (`get_period_desafio_coach_totals`), que continua por token/submitted_at.
+
+    `inicio` não exclui um desafio já apurado (issue #49/#50): uma vez
+    fechado, o valor do desafio passa a contar de forma cumulativa e
+    permanente no total do clã a partir do encerramento em diante — um
+    filtro cujo período começa depois do `prazo_apuracao` ainda deve
+    contá-lo. Só um `fim` anterior ao encerramento exclui o desafio (o
+    período consultado termina antes de o desafio existir como fechado).
+
     Returns dict[clan_name, total_pontos].
     """
-    totals: dict[str, int] = {}
-    for row in fetch_active_counted_desafio_submissions():
-        clan = row.get("clan")
-        if not clan:
+    desafio_ids: list[int] = []
+    for d in list_desafios():
+        if not d.get("apurado_em"):
             continue
-        local_date = _submitted_at_local_date(row.get("submitted_at"))
-        if local_date is None or local_date < inicio:
+        prazo_date = _submitted_at_local_date(d.get("prazo_apuracao"))
+        if prazo_date is None:
             continue
-        if fim is not None and local_date > fim:
+        if fim is not None and prazo_date > fim:
             continue
-        totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
-    return totals
+        desafio_ids.append(d["id"])
+    return _soma_apuracao_por_clan(desafio_ids)
 
 
 def get_period_desafio_coach_totals(inicio: date, fim: date | None = None) -> dict[str, int]:
@@ -1286,18 +1194,12 @@ def get_tipo_clan_totals(
     if tipo == "desafios":
         if inicio:
             return get_period_desafio_totals(inicio, fim)
-        # Sem filtro de data: soma todos os tokens ativos, sem olhar
-        # `submitted_at`. O status `active_counted` (computado pela
-        # reconciliação a partir da própria coluna "Sim" da planilha) é o
-        # único portão sobre se um token conta — não há mais um toggle
-        # `contabilizar_pontos` por desafio a preservar aqui.
-        totals: dict[str, int] = {}
-        for row in fetch_active_counted_desafio_submissions():
-            clan = row.get("clan")
-            if not clan:
-                continue
-            totals[clan] = totals.get(clan, 0) + (row.get("points") or 0)
-        return totals
+        # Sem filtro de data: soma a apuração por percentual já fechada
+        # (issue #44) de todos os desafios apurados (`apurado_em` setado) —
+        # não mais a soma flat por token, que não reflete a regra de
+        # apuração por percentual de engajamento do clã.
+        desafio_ids = [d["id"] for d in list_desafios() if d.get("apurado_em")]
+        return _soma_apuracao_por_clan(desafio_ids)
 
     # Without date filter: read breakdown columns from TABLE_TOTAIS
     if not inicio:
@@ -1327,23 +1229,13 @@ def get_tipo_clan_totals(
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"
-    group_raw: dict[str, int] = {}
     totals: dict[str, int] = {}
     for rec in records:
         rec_is_pro_bono = rec.get("modalidade", "") == "Pro-bono"
         if is_pro_bono != rec_is_pro_bono:
             continue
         clan = rec["clan"]
-        p = rec["pontos"]
-        if p == config.POINTS_PER_RECORD_IN_BATCH:
-            group_raw[clan] = group_raw.get(clan, 0) + p
-        else:
-            totals[clan] = totals.get(clan, 0) + p
-
-    for clan, g in group_raw.items():
-        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
-        if complete:
-            totals[clan] = totals.get(clan, 0) + complete
+        totals[clan] = totals.get(clan, 0) + rec["pontos"]
     return totals
 
 
@@ -1389,7 +1281,6 @@ def get_tipo_coach_totals(
     records = query.execute().data
 
     is_pro_bono = tipo == "pro_bono"
-    group_raw: dict[str, int] = {}
     totals: dict[str, int] = {}
     for rec in records:
         rec_is_pro_bono = rec.get("modalidade", "") == "Pro-bono"
@@ -1398,16 +1289,7 @@ def get_tipo_coach_totals(
         coach = rec.get("coach")
         if not coach:
             continue
-        p = rec["pontos_coach"]
-        if p == config.POINTS_PER_RECORD_IN_BATCH:
-            group_raw[coach] = group_raw.get(coach, 0) + p
-        else:
-            totals[coach] = totals.get(coach, 0) + p
-
-    for coach, g in group_raw.items():
-        complete = (g // config.POINTS_PER_BATCH_GROUP) * config.POINTS_PER_BATCH_GROUP
-        if complete:
-            totals[coach] = totals.get(coach, 0) + complete
+        totals[coach] = totals.get(coach, 0) + rec["pontos_coach"]
     return totals
 
 
@@ -1563,8 +1445,31 @@ def _calcular_apuracao_atual_desafio(desafio_id: int) -> dict[str, "ApuracaoClan
     chamador: `get_desafio_apuracao` para a prévia, `reapurar_desafio_e_aplicar_delta`
     para reabrir um desafio já congelado). Pós-corte, toda submissão conta por
     padrão — só `revisao_status == "reprovado"` exclui (mesma regra de
-    `_submissao_conta_para_pontos_individuais_coach`)."""
-    submissoes = list_desafio_submissions_current(desafio_id=desafio_id, status="active_counted")
+    `_submissao_conta_para_pontos_individuais_coach`).
+
+    Congelada no `prazo_apuracao` do desafio (issue #43): uma submissão cuja
+    data de calendário local (América/São_Paulo) é posterior à data local do
+    prazo nunca conta, mesmo `active_counted` e aprovada — inclusive numa
+    reapuração posterior (ex.: correção de revisão) de um desafio já
+    fechado, que não deve "reabrir" a janela de participação. O corte é por
+    DIA, não pelo instante exato: `prazo_apuracao` costuma carregar um
+    horário sem significado de negócio, e comparar o instante exato excluiria
+    submissões legítimas feitas mais tarde no mesmo dia do prazo (mesma
+    convenção de `_submitted_at_local_date` usada no eixo coach). Sem
+    `prazo_apuracao` definido, nenhum corte é aplicado."""
+    desafio = get_desafio(desafio_id) or {}
+    prazo_date = _submitted_at_local_date(desafio.get("prazo_apuracao"))
+
+    # `list_desafio_submissions_current` é a listagem de auditoria (paginada,
+    # `limit=100` por padrão) — um desafio com mais de 100 submissões
+    # `active_counted` tinha as mais antigas descartadas silenciosamente
+    # nessa apuração. `fetch_active_counted_desafio_submissions` pagina até o
+    # fim e não filtra por desafio, então o filtro por `desafio_id` é feito
+    # aqui.
+    submissoes = [
+        s for s in fetch_active_counted_desafio_submissions()
+        if s.get("desafio_id") == desafio_id
+    ]
     revisoes_map = list_submissoes_revisoes(desafio_id)
     alias_map = get_coach_alias_map()
 
@@ -1575,6 +1480,11 @@ def _calcular_apuracao_atual_desafio(desafio_id: int) -> dict[str, "ApuracaoClan
 
         if not _submissao_conta_para_pontos_individuais_coach(s.get("submitted_at"), rev_status):
             continue
+
+        if prazo_date is not None:
+            submitted_date = _submitted_at_local_date(s.get("submitted_at"))
+            if submitted_date is not None and submitted_date > prazo_date:
+                continue
 
         raw_name = (s.get("raw_name") or "").strip()
         canonical = coach_identity.resolve_coach(raw_name, alias_map) if raw_name else None

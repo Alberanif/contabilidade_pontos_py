@@ -89,14 +89,19 @@ def apurar_desafio(
         tamanho_grupo_por_clan: Mapeamento de clã -> total de coaches cadastrados naquele clã.
         todos_os_clas: Lista opcional dos 8 clãs para garantir que clãs sem submissões fiquem zerados.
 
+    `participantes` conta cada submissão aprovada, sem deduplicar por coach: um
+    reenvio do mesmo coach soma de novo. A defesa contra reenvio indevido é a
+    reprovação manual da submissão (`revisar_submissao`), não uma deduplicação
+    automática — que estava descartando reenvios legítimos (ex.: correção de
+    link) junto com os indevidos.
+
     Returns:
         Dict mapeando nome do clã -> ApuracaoClan.
     """
     clas_alvo = set(todos_os_clas or [])
     clas_alvo.update(tamanho_grupo_por_clan.keys())
 
-    # Agrupa coaches por clã (deduplicando por coach canônico)
-    coaches_por_clan: dict[str, set[str]] = {}
+    submissoes_por_clan: dict[str, int] = {}
 
     for sub in submissoes_aprovadas:
         coach = (sub.get("coach") or sub.get("raw_name") or "").strip()
@@ -111,15 +116,12 @@ def apurar_desafio(
             clan = normalize_clan(clan_raw)
 
         clas_alvo.add(clan)
-        if clan not in coaches_por_clan:
-            coaches_por_clan[clan] = set()
-        coaches_por_clan[clan].add(coach)
+        submissoes_por_clan[clan] = submissoes_por_clan.get(clan, 0) + 1
 
     resultados: dict[str, ApuracaoClan] = {}
 
     for clan in sorted(clas_alvo):
-        participantes_set = coaches_por_clan.get(clan, set())
-        participantes = len(participantes_set)
+        participantes = submissoes_por_clan.get(clan, 0)
         total_grupo = tamanho_grupo_por_clan.get(clan, 0)
 
         if total_grupo <= 0:

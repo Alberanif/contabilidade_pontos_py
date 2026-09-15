@@ -75,9 +75,8 @@ export default function Contabilidade() {
         <h3 className="text-base font-semibold text-blue-800">Configuração Inicial</h3>
         <p className="text-sm text-blue-700">
           Use este botão ao importar uma <strong>nova planilha</strong>. Apaga todos os dados
-          existentes e reimporta tudo do zero: todos os registros são marcados como contabilizados,
-          os totais dos clãs são lidos diretamente da planilha de pontuação, e o carry-over de
-          grupo é configurado para futuras contabilizações.
+          existentes e reimporta tudo do zero: todos os registros são marcados como contabilizados
+          e os totais dos clãs são lidos diretamente da planilha de pontuação.
         </p>
         <button
           onClick={handleImportar}
@@ -92,11 +91,6 @@ export default function Contabilidade() {
             <p>Registros removidos: <strong>{importResult.registros_removidos}</strong></p>
             <p>Coaching Individual importados: <strong>{importResult.coaching_individual_importados}</strong></p>
             <p>Grupo/Empresa contabilizados: <strong>{importResult.grupo_contabilizados}</strong></p>
-            {importResult.grupo_pendentes > 0 && (
-              <p className="text-amber-700">
-                Grupo/Empresa na fila (aguardando lote): <strong>{importResult.grupo_pendentes}</strong>
-              </p>
-            )}
             {Object.keys(importResult.totais_clans).length > 0 && (
               <div className="mt-2">
                 <p className="font-medium mb-1">Totais carregados da planilha:</p>
@@ -120,9 +114,9 @@ export default function Contabilidade() {
             Executar Contagem
           </h3>
           <p className="text-sm text-gray-500">
-            Busca novos registros na planilha. Coaching Individual: 30 pts por registro.
-            Coaching em grupo / Empresa: 30 pts a cada 5 registros acumulados por clã (lote FIFO).
-            Registros já processados são ignorados.
+            Busca novos registros na planilha. Coaching Individual e Coaching
+            em grupo / Empresa: 30 pts fixos por registro. Registros já
+            processados são ignorados.
           </p>
           <button
             onClick={handleExecutar}
@@ -173,9 +167,6 @@ export default function Contabilidade() {
           <p className="text-sm text-gray-600">
             Coaching Individual contabilizados: <strong>{result.novos_registros}</strong>
           </p>
-          <p className="text-sm text-gray-600">
-            Grupo/Empresa adicionados à fila: <strong>{result.novos_pendentes}</strong>
-          </p>
 
           {result.novos_registros > 0 && (
             <div>
@@ -196,31 +187,13 @@ export default function Contabilidade() {
           {Object.keys(result.pontos_grupo_por_clan ?? {}).length > 0 && (
             <div>
               <p className="text-sm font-medium text-gray-600 mb-1">
-                Pontos de lotes completos (grupo/empresa) por clã:
+                Pontos de Coaching em grupo/Empresa por clã:
               </p>
               <ul className="text-sm space-y-1">
                 {Object.entries(result.pontos_grupo_por_clan).map(([clan, pontos]) => (
                   <li key={clan} className="flex justify-between max-w-xs">
                     <span className="text-gray-700">{clan}</span>
                     <span className="font-semibold text-green-600">+{pontos}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {Object.keys(result.pendentes_por_clan ?? {}).length > 0 && (
-            <div>
-              <p className="text-sm font-medium text-amber-700 mb-1">
-                Registros pendentes aguardando lote completo (Clãs):
-              </p>
-              <ul className="text-sm space-y-1">
-                {Object.entries(result.pendentes_por_clan).map(([clan, count]) => (
-                  <li key={clan} className="flex justify-between max-w-xs">
-                    <span className="text-gray-700">{clan}</span>
-                    <span className="text-amber-600">
-                      {count} registro{count !== 1 ? "s" : ""}
-                    </span>
                   </li>
                 ))}
               </ul>
@@ -237,24 +210,6 @@ export default function Contabilidade() {
                   <li key={coach} className="flex justify-between max-w-xs">
                     <span className="text-gray-700">{coach}</span>
                     <span className="font-semibold text-indigo-600">+{pontos}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {Object.keys(result.pendentes_por_coach ?? {}).length > 0 && (
-            <div className="mt-4">
-              <p className="text-sm font-medium text-amber-700 mb-1">
-                Fila de Coaches aguardando lote completo:
-              </p>
-              <ul className="text-sm space-y-1">
-                {Object.entries(result.pendentes_por_coach).map(([coach, count]) => (
-                  <li key={coach} className="flex justify-between max-w-xs">
-                    <span className="text-gray-700">{coach}</span>
-                    <span className="text-amber-600">
-                      {count} pendente{count !== 1 ? "s" : ""}
-                    </span>
                   </li>
                 ))}
               </ul>

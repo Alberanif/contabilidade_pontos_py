@@ -95,45 +95,26 @@ class TestGetTipoCoachTotalsNoDate:
         assert result == {"Coach A": 900, "Coach B": 600}
 
 
-def _mock_active_counted(rows):
-    """Mock paginado de `fetch_active_counted_desafio_submissions`: uma
-    página com `rows`, depois uma página vazia (fim da varredura)."""
-    calls = {"n": 0}
-    chain = MagicMock()
-    for m in ("table", "select", "eq", "order", "range"):
-        getattr(chain, m).return_value = chain
-
-    def _execute():
-        calls["n"] += 1
-        result = MagicMock()
-        result.data = rows if calls["n"] == 1 else []
-        return result
-
-    chain.execute.side_effect = _execute
-    client = MagicMock()
-    client.table.return_value = chain
-    return client
-
-
 class TestGetTipoClanTotalsDesafiosNoDate:
-    """Sem datas: soma `points` dos tokens `active_counted` em
-    `desafio_submissions_current`, agrupados por clã (issue #19 / Task 8) —
-    em vez do antigo join `desafios.contabilizar_pontos` + `desafio_registros`."""
+    """Sem datas: soma a apuração por percentual já fechada
+    (`desafio_clan_apuracoes`) dos desafios apurados, agrupada por clã (issue
+    #44) — não mais a soma flat de `points` dos tokens (issue #19 / Task 8,
+    substituída porque não reflete a apuração por percentual de engajamento)."""
 
-    def test_soma_pontos_de_tokens_ativos_por_cla(self):
-        rows = [
-            {"clan": "CLÃ 1", "points": 10, "status": "active_counted"},
-            {"clan": "CLÃ 1", "points": 5, "status": "active_counted"},
-            {"clan": "CLÃ 2", "points": 7, "status": "active_counted"},
-        ]
-        client = _mock_active_counted(rows)
-        with patch("supabase_client._get_client", return_value=client):
+    def test_soma_apuracao_de_desafios_apurados_por_cla(self):
+        with patch("supabase_client.list_desafios", return_value=[
+                 {"id": 1, "apurado_em": "2026-09-01T00:00:00+00:00"},
+             ]), \
+             patch("supabase_client.get_desafio_clan_apuracoes", return_value=[
+                 {"clan": "CLÃ 1", "pontos": 10},
+                 {"clan": "CLÃ 1", "pontos": 5},
+                 {"clan": "CLÃ 2", "pontos": 7},
+             ]):
             result = supabase_client.get_tipo_clan_totals("desafios")
         assert result == {"CLÃ 1": 15, "CLÃ 2": 7}
 
-    def test_sem_tokens_ativos_retorna_vazio(self):
-        client = _mock_active_counted([])
-        with patch("supabase_client._get_client", return_value=client):
+    def test_sem_desafios_apurados_retorna_vazio(self):
+        with patch("supabase_client.list_desafios", return_value=[]):
             result = supabase_client.get_tipo_clan_totals("desafios")
         assert result == {}
 

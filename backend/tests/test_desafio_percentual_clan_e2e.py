@@ -86,7 +86,7 @@ def test_fluxo_e2e_apuracao_desafio_pos_corte():
     with patch("supabase_client.list_desafios", return_value=[desafio_mock]), \
          patch("supabase_client.get_desafio", return_value=desafio_mock), \
          patch("supabase_client.get_desafio_submission_current", side_effect=mock_get_submission), \
-         patch("supabase_client.list_desafio_submissions_current", return_value=list(submissoes_dict.values())), \
+         patch("supabase_client.fetch_active_counted_desafio_submissions", return_value=list(submissoes_dict.values())), \
          patch("supabase_client.list_submissoes_revisoes", side_effect=mock_list_revisoes), \
          patch("supabase_client.revisar_submissao", side_effect=mock_revisar), \
          patch("supabase_client.salvar_apuracao_clan", side_effect=mock_salvar_apuracao), \
@@ -104,8 +104,6 @@ def test_fluxo_e2e_apuracao_desafio_pos_corte():
          patch("supabase_client.list_clan_totals", return_value=[]), \
          patch("supabase_client.list_coach_totals", return_value=[]), \
          patch("supabase_client.get_tipo_coach_totals", return_value={}), \
-         patch("supabase_client.get_all_pending_clans", return_value=[]), \
-         patch("supabase_client.get_all_pending_coaches", return_value=[]), \
          patch("google_sheets_client.fetch_records", return_value=[["Col1", "Col2", "Col3"]]), \
          patch("google_sheets_client.fetch_records_pro_bono", return_value=[]), \
          patch("desafio_sync_service.sync_desafios") as mock_sync:

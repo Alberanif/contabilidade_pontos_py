@@ -68,8 +68,6 @@ def test_coach_identity_resolution_e2e_flow():
          patch("supabase_client.list_coach_totals", return_value=[{"coach": "Vinicius Marini"}]), \
          patch("supabase_client.get_all_desafio_token_coach_names", return_value=set()), \
          patch("supabase_client.get_tipo_coach_totals", return_value={}), \
-         patch("supabase_client.get_pending_group_records_by_coach", return_value=[]), \
-         patch("supabase_client.get_coach_carry_over", return_value=0), \
          patch("config.GROQ_API_KEY", "mock_key"):
 
 

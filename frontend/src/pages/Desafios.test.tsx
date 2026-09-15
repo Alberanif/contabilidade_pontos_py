@@ -313,6 +313,25 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     expect(fetchSubmissoesDoDesafio).toHaveBeenCalledTimes(1);
   });
 
+  it("filters submissions by coach name client-side (case-insensitive substring), without new server calls", async () => {
+    vi.mocked(fetchSubmissoesDoDesafio).mockReset().mockResolvedValue([
+      buildSubmissao({ token: "tok-ana", coach: "Ana Albertim" }),
+      buildSubmissao({ token: "tok-bruno", coach: "Bruno Silva" }),
+    ]);
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await user.click(await screen.findByText("Semana de Treinos"));
+
+    expect(await screen.findByText("tok-ana")).toBeInTheDocument();
+    expect(screen.getByText("tok-bruno")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/buscar coach/i), "ana");
+
+    await waitFor(() => expect(screen.queryByText("tok-bruno")).not.toBeInTheDocument());
+    expect(screen.getByText("tok-ana")).toBeInTheDocument();
+    expect(fetchSubmissoesDoDesafio).toHaveBeenCalledTimes(1);
+  });
+
   // --- Step 2: detalhe de token (A-I, motivos, link, observação, estado atual) e histórico de versões ---
 
   it("shows the token detail with the 9 raw A-I fields in sheet order, current state and invalid reasons", async () => {

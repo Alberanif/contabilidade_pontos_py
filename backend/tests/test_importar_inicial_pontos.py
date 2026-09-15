@@ -127,24 +127,16 @@ class TestImportarInicialPontos:
         assert records[0]["pontos"] == config.POINTS_PER_COACHING_INDIVIDUAL
         assert records[0]["pontos_coach"] == config.POINTS_PER_COACHING_INDIVIDUAL
 
-    def test_grupo_contabilizado_pontos_per_record_in_batch(self):
-        """Grupo com pessoas >= BATCH_SIZE_GROUP (clã tem lote completo):
-        pontos = POINTS_PER_RECORD_IN_BATCH."""
+    def test_grupo_sempre_contabilizado_pontos_fixos(self):
+        """Grupo/Empresa é sempre contabilizado imediatamente: 30 pontos
+        fixos por registro (config.POINTS_PER_COACHING_INDIVIDUAL),
+        independente do número de pessoas atendidas — sem lote."""
         records = _run_import(
-            group_rows=[_group_row("06/04/2026", n=6)],  # 6 >= BATCH_SIZE_GROUP (5)
-            ranking=[{"clan": "CLÃ 1", "total_pontos": 6}],
+            group_rows=[_group_row("06/04/2026", n=2)],
+            ranking=[{"clan": "CLÃ 1", "total_pontos": 30}],
         )
         assert len(records) == 1
-        assert records[0]["pontos"] == config.POINTS_PER_RECORD_IN_BATCH
-
-    def test_grupo_pendente_pontos_zero(self):
-        """Grupo com pessoas < BATCH_SIZE_GROUP (sem lote completo): pontos = 0."""
-        records = _run_import(
-            group_rows=[_group_row("06/04/2026", n=2)],  # 2 < BATCH_SIZE_GROUP (5)
-            ranking=[{"clan": "CLÃ 1", "total_pontos": 0}],
-        )
-        assert len(records) == 1
-        assert records[0]["pontos"] == 0
+        assert records[0]["pontos"] == config.POINTS_PER_COACHING_INDIVIDUAL
 
     def test_pro_bono_pontos_per_pro_bono(self):
         """Pro-bono contabilizado: pontos = POINTS_PER_PRO_BONO."""

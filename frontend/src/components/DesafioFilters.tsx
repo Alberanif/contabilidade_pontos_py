@@ -1,14 +1,18 @@
-// Filtros combináveis (clã, status, período) exibidos dentro do detalhe de um
-// desafio, sobre a lista de submissões desse desafio (issue #18/#21). O filtro
-// de "token" é uma busca direta (ver `TokenSearch` em `Desafios.tsx`), não uma
-// lista filtrável, então não aparece aqui. O filtro de "desafio" é a própria
-// navegação para este detalhe.
+// Filtros combináveis (coach, clã, status, período) exibidos dentro do
+// detalhe de um desafio, sobre a lista de submissões desse desafio (issue
+// #18/#21). Clã e status são aplicados no servidor (refazem o fetch); coach e
+// período são client-side, sobre as submissões já carregadas — mesma lógica
+// de `submissoesFiltradas` em `Desafios.tsx`. O filtro de "token" é uma busca
+// direta (ver `TokenSearch` em `Desafios.tsx`), não uma lista filtrável,
+// então não aparece aqui. O filtro de "desafio" é a própria navegação para
+// este detalhe.
 
 export interface DesafioFiltersValue {
   clan: string;
   status: string;
   dataInicio: string;
   dataFim: string;
+  coach: string;
 }
 
 export interface StatusOption {
@@ -28,6 +32,20 @@ const inputClass =
 export default function DesafioFilters({ value, onChange, statusOptions }: DesafioFiltersProps) {
   return (
     <div className="flex flex-wrap gap-4 items-end bg-white border border-gray-200 rounded-xl p-4">
+      <div>
+        <label htmlFor="filtro-coach" className="block text-xs font-medium text-gray-500 mb-1">
+          Buscar coach
+        </label>
+        <input
+          id="filtro-coach"
+          type="text"
+          value={value.coach}
+          onChange={(e) => onChange({ ...value, coach: e.target.value })}
+          placeholder="Nome do coach"
+          className={`${inputClass} w-48`}
+        />
+      </div>
+
       <div>
         <label htmlFor="filtro-cla" className="block text-xs font-medium text-gray-500 mb-1">
           Clã
@@ -87,10 +105,10 @@ export default function DesafioFilters({ value, onChange, statusOptions }: Desaf
         />
       </div>
 
-      {(value.clan || value.status || value.dataInicio || value.dataFim) && (
+      {(value.coach || value.clan || value.status || value.dataInicio || value.dataFim) && (
         <button
           type="button"
-          onClick={() => onChange({ clan: "", status: "", dataInicio: "", dataFim: "" })}
+          onClick={() => onChange({ coach: "", clan: "", status: "", dataInicio: "", dataFim: "" })}
           className="text-gray-500 hover:text-gray-700 text-sm"
         >
           Limpar filtros

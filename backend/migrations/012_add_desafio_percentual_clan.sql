@@ -28,6 +28,6 @@ CREATE TABLE IF NOT EXISTS desafio_clan_apuracoes (
     total_grupo           INTEGER NOT NULL CHECK (total_grupo >= 0),
     percentual            NUMERIC NOT NULL,
     pontos                INTEGER NOT NULL CHECK (pontos >= 0),
-    apurado_em            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    apurado_em            TIMESTAMPTZ NOT NULL DEFAULT NOW(),z
     UNIQUE (desafio_id, clan)
 );

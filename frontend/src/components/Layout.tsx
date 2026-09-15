@@ -3,7 +3,6 @@ import { NavLink, Outlet } from "react-router-dom";
 const links = [
   { to: "/", label: "Dashboard" },
   { to: "/registros", label: "Registros" },
-  { to: "/fila", label: "Fila" },
   { to: "/desafios", label: "Desafios" },
   { to: "/contabilidade", label: "Contabilidade" },
   { to: "/coaches-por-cla", label: "Coaches por Clã" },

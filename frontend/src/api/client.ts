@@ -129,13 +129,10 @@ export interface DesafioSyncResult {
 
 export interface ExecutarResponse {
   novos_registros: number;
-  novos_pendentes: number;
   pro_bono_registros: number;
   pontos_por_clan: Record<string, number>;
   pontos_grupo_por_clan: Record<string, number>;
-  pendentes_por_clan: Record<string, number>;
   pontos_por_coach: Record<string, number>;
-  pendentes_por_coach: Record<string, number>;
   totais_atualizados: Record<string, number>;
   desafios: DesafioSyncResult;
   mensagem: string;
@@ -149,44 +146,6 @@ export interface ExecutarResponse {
 export type ReprocessarResponse = Omit<ExecutarResponse, "desafios"> & {
   registros_removidos: number;
 };
-
-export interface AprovarClanResponse {
-  clan: string;
-  lotes_aprovados: number;
-  registros_promovidos: number;
-  pessoas_contabilizadas: number;
-  pessoas_em_espera: number;
-  pontos_adicionados: number;
-  novo_total: number;
-  pendentes_restantes: number;
-  mensagem: string;
-}
-
-export function aprovarClan(clan: string): Promise<AprovarClanResponse> {
-  return request("/api/contabilidade/aprovar-clan", {
-    method: "POST",
-    body: JSON.stringify({ clan }),
-  });
-}
-
-export interface AprovarCoachResponse {
-  coach: string;
-  lotes_aprovados: number;
-  registros_promovidos: number;
-  pessoas_contabilizadas: number;
-  pessoas_em_espera: number;
-  pontos_adicionados: number;
-  novo_total: number;
-  pendentes_restantes: number;
-  mensagem: string;
-}
-
-export function aprovarCoach(coach: string): Promise<AprovarCoachResponse> {
-  return request("/api/contabilidade/aprovar-coach", {
-    method: "POST",
-    body: JSON.stringify({ coach }),
-  });
-}
 
 export interface ImportarResponse {
   registros_importados: number;
@@ -229,12 +188,9 @@ export interface ImportarInicialResponse {
   registros_removidos: number;
   coaching_individual_importados: number;
   grupo_contabilizados: number;
-  grupo_pendentes: number;
   pro_bono_importados: number;
   totais_clans: Record<string, number>;
-  carry_over_por_clan: Record<string, number>;
   totais_coaches: Record<string, number>;
-  carry_over_por_coach: Record<string, number>;
   mensagem: string;
 }
 

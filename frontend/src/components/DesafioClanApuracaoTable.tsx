@@ -36,7 +36,7 @@ export const DesafioClanApuracaoTable: React.FC<DesafioClanApuracaoTableProps> =
             🏆 Pontuação por Engajamento do Clã
           </h3>
           <p className="text-xs text-gray-500 mt-0.5">
-            Pontos atribuídos de acordo com o percentual de coaches aprovados no clã.
+            Pontos atribuídos de acordo com o percentual de coaches válidos no clã.
           </p>
         </div>
         <div>

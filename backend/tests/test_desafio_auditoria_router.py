@@ -577,7 +577,7 @@ def test_get_desafio_coach_totals_agrupa_por_canonico(monkeypatch):
     assert supabase_client.get_desafio_coach_totals(7) == {"Ana": 200}
 
 
-def test_get_desafio_coach_totals_pos_corte_exige_revisao_aprovada(monkeypatch):
+def test_get_desafio_coach_totals_pos_corte_reprovado_exclui(monkeypatch):
     import supabase_client
 
     class _Chain:

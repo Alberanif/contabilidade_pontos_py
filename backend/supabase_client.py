@@ -1570,17 +1570,10 @@ def _calcular_apuracao_atual_desafio(desafio_id: int) -> dict[str, "ApuracaoClan
 
     aprovadas = []
     for s in submissoes:
-        sub_date = _submitted_at_local_date(s.get("submitted_at"))
         token = s.get("token")
         rev_status = revisoes_map.get(token, {}).get("status", "pendente")
 
-        if sub_date and sub_date >= config.DESAFIO_PERCENTUAL_CLAN_CORTE:
-            conta = rev_status != "reprovado"
-        else:
-            # Pré-corte conta se active_counted, sem qualquer critério de revisão.
-            conta = True
-
-        if not conta:
+        if not _submissao_conta_para_pontos_individuais_coach(s.get("submitted_at"), rev_status):
             continue
 
         raw_name = (s.get("raw_name") or "").strip()

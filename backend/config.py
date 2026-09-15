@@ -45,9 +45,10 @@ POINTS_PER_DESAFIO_SUBMISSION = int(
 
 # Pontuação individual do coach por desafio — separada do valor de clã acima
 # (que continua alimentando só o crédito contínuo por token do clã). A partir
-# do corte de vigência (DESAFIO_PERCENTUAL_CLAN_CORTE, definido abaixo), exige
-# também aprovação manual na plataforma (revisao_status == "aprovado"),
-# espelhando a mesma regra que a apuração por percentual do clã já aplica.
+# do corte de vigência (DESAFIO_PERCENTUAL_CLAN_CORTE, definido abaixo), a
+# submissão conta por padrão; só é excluída se for explicitamente reprovada
+# (revisao_status == "reprovado"), espelhando a mesma regra que a apuração
+# por percentual do clã já aplica.
 POINTS_PER_DESAFIO_SUBMISSION_COACH = int(
     os.getenv("POINTS_PER_DESAFIO_SUBMISSION_COACH", "100")
 )

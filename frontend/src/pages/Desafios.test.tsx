@@ -481,25 +481,25 @@ describe("Desafios (tela de consulta e auditoria)", () => {
     expect(screen.queryByText("tok-desafio-1")).not.toBeInTheDocument();
   });
 
-  // --- Fix: aviso de limite invisível de 100 submissões (task review) ---
+  // --- Fix: 100+ submissões não podem sumir da tela de auditoria/revisão ---
 
-  it("shows a disclosure note when the submissions page comes back exactly at the 100-row limit", async () => {
+  it("shows all 100 submissions, with no leftover disclosure note, when a desafio has exactly one full page", async () => {
     const cem = Array.from({ length: 100 }, (_, i) => buildSubmissao({ token: `tok-${i}` }));
-    vi.mocked(fetchSubmissoesDoDesafio).mockReset().mockResolvedValue(cem);
+    vi.mocked(fetchSubmissoesDoDesafio)
+      .mockReset()
+      .mockResolvedValueOnce(cem)
+      .mockResolvedValueOnce([]);
 
     const user = userEvent.setup();
     render(<Desafios />);
     await user.click(await screen.findByText("Semana de Treinos"));
 
-    await waitFor(() =>
-      expect(fetchSubmissoesDoDesafio).toHaveBeenCalledWith(1, expect.objectContaining({ limit: 100 }))
-    );
-    expect(
-      await screen.findByText(/mostrando as primeiras 100 submiss(õ|o)es/i)
-    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/submiss(õ|o)es \(100\)/i)).toBeInTheDocument());
+    expect(fetchSubmissoesDoDesafio).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/mostrando as primeiras 100 submiss(õ|o)es/i)).not.toBeInTheDocument();
   });
 
-  it("does not show the disclosure note when the submissions page has fewer than 100 rows", async () => {
+  it("does not show the removed disclosure note when the submissions page has fewer than 100 rows", async () => {
     vi.mocked(fetchSubmissoesDoDesafio).mockReset().mockResolvedValue([buildSubmissao()]);
 
     const user = userEvent.setup();
@@ -508,6 +508,23 @@ describe("Desafios (tela de consulta e auditoria)", () => {
 
     await screen.findByText("tok-abc123");
     expect(screen.queryByText(/mostrando as primeiras 100 submiss(õ|o)es/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps fetching subsequent pages instead of silently dropping submissions past the first 100", async () => {
+    const pagina1 = Array.from({ length: 100 }, (_, i) => buildSubmissao({ token: `tok-${i}` }));
+    const pagina2 = [buildSubmissao({ token: "tok-100", coach: "Coach Extra" })];
+    vi.mocked(fetchSubmissoesDoDesafio)
+      .mockReset()
+      .mockResolvedValueOnce(pagina1)
+      .mockResolvedValueOnce(pagina2);
+
+    const user = userEvent.setup();
+    render(<Desafios />);
+    await user.click(await screen.findByText("Semana de Treinos"));
+
+    await waitFor(() => expect(screen.getByText(/submiss(õ|o)es \(101\)/i)).toBeInTheDocument());
+    expect(fetchSubmissoesDoDesafio).toHaveBeenCalledTimes(2);
+    expect(fetchSubmissoesDoDesafio).toHaveBeenNthCalledWith(2, 1, expect.objectContaining({ offset: 100 }));
   });
 
   it("browses sync runs and drills into one run's detail", async () => {

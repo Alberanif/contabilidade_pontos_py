@@ -49,12 +49,35 @@ const DESAFIO_STATUS_LABELS: Record<string, string> = {
   arquivado: "Arquivado",
 };
 
-// Limite explícito de submissões buscadas por página — casa com o default
-// implícito do backend (limit=100). Como não há controle de paginação nesta
-// tela (fora de escopo), quando a contagem retornada bate exatamente nesse
-// limite exibimos um aviso: pode haver mais linhas que a UI não está
-// mostrando, e o filtro de período client-side só enxerga esta página.
-const SUBMISSOES_LIMIT = 100;
+// Tamanho de página usado para varrer TODAS as submissões de um desafio
+// (não um teto de exibição): um desafio com mais de 100 envios tinha os mais
+// antigos silenciosamente escondidos da tela de auditoria/revisão manual
+// (limit=100 numa única chamada, ordenado por submitted_at desc) — coaches
+// como os do clã 3 ficavam inacessíveis para reprovação manual mesmo já
+// contando para a pontuação. `fetchTodasSubmissoesDoDesafio` pagina até
+// receber uma página menor que o pedido (sinal padrão de última página).
+const SUBMISSOES_PAGE_SIZE = 100;
+
+async function fetchTodasSubmissoesDoDesafio(
+  id: number,
+  filtros: { clan?: string; status?: string },
+  foiCancelado: () => boolean
+): Promise<DesafioSubmissao[]> {
+  const todas: DesafioSubmissao[] = [];
+  let offset = 0;
+  while (!foiCancelado()) {
+    const pagina = await fetchSubmissoesDoDesafio(id, {
+      clan: filtros.clan,
+      status: filtros.status,
+      limit: SUBMISSOES_PAGE_SIZE,
+      offset,
+    });
+    todas.push(...pagina);
+    if (pagina.length < SUBMISSOES_PAGE_SIZE) break;
+    offset += pagina.length;
+  }
+  return todas;
+}
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "-";
@@ -223,18 +246,6 @@ export default function Desafios() {
       .finally(() => setLoadingApuracao(false));
   };
 
-  const carregarSubmissoes = (id: number) => {
-    setLoadingSubmissoes(true);
-    fetchSubmissoesDoDesafio(id, {
-      clan: filtros.clan || undefined,
-      status: filtros.status || undefined,
-      limit: SUBMISSOES_LIMIT,
-    })
-      .then((data) => setSubmissoes(data))
-      .catch((e) => setErroSubmissoes(e instanceof Error ? e.message : "Erro ao carregar submissões"))
-      .finally(() => setLoadingSubmissoes(false));
-  };
-
   useEffect(() => {
     if (desafioDetalheId == null) return;
     carregarApuracao(desafioDetalheId);
@@ -275,11 +286,11 @@ export default function Desafios() {
     setErroSubmissoes("");
     setSubmissoes([]);
     setPaginaSubmissoes(1);
-    fetchSubmissoesDoDesafio(desafioDetalheId, {
-      clan: filtros.clan || undefined,
-      status: filtros.status || undefined,
-      limit: SUBMISSOES_LIMIT,
-    })
+    fetchTodasSubmissoesDoDesafio(
+      desafioDetalheId,
+      { clan: filtros.clan || undefined, status: filtros.status || undefined },
+      () => cancelado
+    )
       .then((data) => {
         if (!cancelado) setSubmissoes(data);
       })
@@ -611,13 +622,6 @@ export default function Desafios() {
               <h4 className="text-sm font-semibold text-gray-700 mb-2">
                 Submissões ({submissoesFiltradas.length})
               </h4>
-
-              {submissoes.length === SUBMISSOES_LIMIT && (
-                <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs mb-2">
-                  Mostrando as primeiras {SUBMISSOES_LIMIT} submissões; o filtro de período se aplica apenas a esta
-                  página.
-                </p>
-              )}
 
               {erroSubmissoes && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-2">

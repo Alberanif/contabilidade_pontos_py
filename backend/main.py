@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import config  # noqa: F401 — valida variáveis de ambiente ao importar
+from auth import BasicAuthMiddleware
 from logging_config import configure_logging
 from routers import (
     contabilidade,
@@ -25,9 +26,13 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Ordem: o último middleware adicionado é o mais externo. A autenticação é
+# adicionada antes do CORS para que o CORS fique por fora e responda ao
+# preflight (OPTIONS) sem exigir credenciais.
+app.add_middleware(BasicAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

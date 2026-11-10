@@ -6,7 +6,7 @@ Este documento consolida o **checklist de rollout** e os procedimentos operacion
 
 ## 1. Pré-requisitos de Implantação
 
-Antes de executar a migração em produção, confirme que as seguintes variáveis de ambiente e pré-condições operacionais foram preenchidas no ambiente (ex.: Railway / servidor de produção):
+Antes de executar a migração em produção, confirme que as seguintes variáveis de ambiente e pré-condições operacionais foram preenchidas no ambiente (ex.: Easypanel / servidor de produção):
 
 | Parâmetro | Descrição | Status de Verificação |
 |---|---|---|

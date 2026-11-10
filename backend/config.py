@@ -26,7 +26,31 @@ def _validate():
         )
 
 
+# Autenticação (HTTP Basic) — protege API e frontend. Sem senha o app recusa
+# subir, a menos que APP_AUTH_DISABLED=true (somente dev local / testes).
+APP_AUTH_DISABLED = os.getenv("APP_AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
+APP_USER = os.getenv("APP_USER", "admin")
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+
+# CORS — lista separada por vírgulas. Em produção o frontend é same-origin e
+# nenhuma origem extra é necessária; o default cobre apenas o Vite em dev.
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+]
+
+
+def _validate_auth():
+    if not APP_AUTH_DISABLED and not APP_PASSWORD:
+        raise ValueError(
+            "APP_PASSWORD não configurada. Defina APP_PASSWORD (e opcionalmente "
+            "APP_USER) ou, apenas em dev local, APP_AUTH_DISABLED=true."
+        )
+
+
 _validate()
+_validate_auth()
 
 # Google Sheets
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")

@@ -1,0 +1,9 @@
+# Uso local para validar a imagem de produção: docker compose up --build
+# O Easypanel NÃO usa este arquivo (builda direto pelo Dockerfile).
+services:
+  app:
+    build: .
+    env_file: .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

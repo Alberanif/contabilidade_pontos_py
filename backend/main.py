@@ -58,6 +58,8 @@ app.add_middleware(
 )
 
 app.include_router(auth_router.router, prefix="/api/auth", tags=["Autenticação"])
+from routers import auth_senha  # noqa: E402
+app.include_router(auth_senha.router, prefix="/api/auth", tags=["Autenticação"])
 app.include_router(contabilidade.router, prefix="/api/contabilidade", tags=["Contabilidade"])
 app.include_router(registros.router, prefix="/api/registros", tags=["Registros"])
 app.include_router(clans.router, prefix="/api/clans", tags=["Clãs"])

@@ -1,3 +1,5 @@
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 import config  # noqa: F401 — valida variáveis de ambiente ao importar
 from auth import BasicAuthMiddleware
 from logging_config import configure_logging
+import users
 from routers import (
     contabilidade,
     registros,
@@ -20,7 +23,22 @@ from routers import (
 
 configure_logging()
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Semeia o primeiro admin (idempotente). Falha no banco não derruba a API.
+    if not config.APP_AUTH_DISABLED:
+        try:
+            users.seed_first_admin()
+        except Exception:
+            logger.exception("Falha ao semear o administrador inicial")
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Calcula Pontos Ultimate",
     description="Sistema de contabilidade de pontos para o desafio de clãs IGT ULTIMATE",
     version="1.0.0",

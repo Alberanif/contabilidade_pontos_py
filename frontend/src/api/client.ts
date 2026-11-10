@@ -570,3 +570,38 @@ export function revisarSubmissao(
   });
 }
 
+// --- Gestão de usuários (admin) ---
+
+export interface UsuarioCreate {
+  nome: string;
+  email: string;
+  senha_provisoria: string;
+  is_admin: boolean;
+}
+
+export interface UsuarioUpdate {
+  nome?: string;
+  email?: string;
+  is_admin?: boolean;
+  ativo?: boolean;
+}
+
+export function listarUsuarios(): Promise<Usuario[]> {
+  return request("/api/usuarios");
+}
+
+export function criarUsuario(dados: UsuarioCreate): Promise<Usuario> {
+  return request("/api/usuarios", { method: "POST", body: JSON.stringify(dados) });
+}
+
+export function atualizarUsuario(id: number, dados: UsuarioUpdate): Promise<Usuario> {
+  return request(`/api/usuarios/${id}`, { method: "PATCH", body: JSON.stringify(dados) });
+}
+
+export function redefinirSenha(id: number, senhaProvisoria: string): Promise<void> {
+  return request(`/api/usuarios/${id}/redefinir-senha`, {
+    method: "POST",
+    body: JSON.stringify({ senha_provisoria: senhaProvisoria }),
+  });
+}
+

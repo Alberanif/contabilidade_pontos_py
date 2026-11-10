@@ -21,6 +21,7 @@ from routers import (
     desafio_auditoria,
     desafio_import,
 )
+from routers import usuarios as usuarios_router
 
 configure_logging()
 
@@ -58,6 +59,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router.router, prefix="/api/auth", tags=["Autenticação"])
+app.include_router(usuarios_router.router, prefix="/api/usuarios", tags=["Usuários"])
 app.include_router(contabilidade.router, prefix="/api/contabilidade", tags=["Contabilidade"])
 app.include_router(registros.router, prefix="/api/registros", tags=["Registros"])
 app.include_router(clans.router, prefix="/api/clans", tags=["Clãs"])

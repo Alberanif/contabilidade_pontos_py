@@ -605,3 +605,12 @@ export function redefinirSenha(id: number, senhaProvisoria: string): Promise<voi
   });
 }
 
+// --- Troca de senha (issue #61) ---
+
+export function trocarSenha(senhaAtual: string, novaSenha: string): Promise<void> {
+  return request("/api/auth/trocar-senha", {
+    method: "POST",
+    body: JSON.stringify({ senha_atual: senhaAtual, nova_senha: novaSenha }),
+  });
+}
+

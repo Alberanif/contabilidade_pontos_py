@@ -30,7 +30,9 @@ def _validate():
 # subir, a menos que APP_AUTH_DISABLED=true (somente dev local / testes).
 APP_AUTH_DISABLED = os.getenv("APP_AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
 APP_USER = os.getenv("APP_USER", "admin")
-APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")  # APP_USER/APP_PASSWORD: só semeiam o 1º admin
+# Chave de assinatura das sessões de login (PRD #54).
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 
 # CORS — lista separada por vírgulas. Em produção o frontend é same-origin e
 # nenhuma origem extra é necessária; o default cobre apenas o Vite em dev.
@@ -46,6 +48,11 @@ def _validate_auth():
         raise ValueError(
             "APP_PASSWORD não configurada. Defina APP_PASSWORD (e opcionalmente "
             "APP_USER) ou, apenas em dev local, APP_AUTH_DISABLED=true."
+        )
+    if not APP_AUTH_DISABLED and not SESSION_SECRET:
+        raise ValueError(
+            "SESSION_SECRET não configurada. Defina uma string aleatória longa "
+            "ou, apenas em dev local, APP_AUTH_DISABLED=true."
         )
 
 

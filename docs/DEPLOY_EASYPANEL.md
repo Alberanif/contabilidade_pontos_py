@@ -39,7 +39,7 @@ Demais (ver `.env.example`): `GSHEET_RECORDS_PRO_BONO_*`, `GSHEET_DESAFIOS_*`, `
 - Para colocar o JSON da service account em uma linha: `jq -c . service-account.json`.
 
 ## 3. Acesso e verificação
-> O login próprio com sessão por cookie é **a ser implementado nas issues #55–#62** (PRD #54). Os passos abaixo descrevem o comportamento alvo e só valem depois que essas issues forem entregues.
+- Login por sessão (cookie `HttpOnly`, 7 dias). Em produção com HTTPS mantenha `SESSION_COOKIE_SECURE=true` (padrão); em HTTP puro (teste local) defina `SESSION_COOKIE_SECURE=false`.
 
 **Ordem do deploy**
 1. Aplicar a migration de usuários (`app_users` e `auth_events`, em `backend/migrations`) no Supabase **antes** de subir a nova versão.

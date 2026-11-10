@@ -2,8 +2,42 @@
 // Em dev local, define VITE_API_BASE_URL=http://localhost:8000 no .env.
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
+// --- Autenticação (sessão por cookie HttpOnly) ---
+
+export interface Usuario {
+  id: number;
+  email: string;
+  nome: string;
+  is_admin: boolean;
+  ativo: boolean;
+  deve_trocar_senha: boolean;
+  ultimo_login_em: string | null;
+  criado_em: string;
+}
+
+export const TROCA_SENHA_OBRIGATORIA = "troca_de_senha_obrigatoria";
+
+export interface AuthEventHandlers {
+  /** 401 fora dos endpoints de login/me: a sessão expirou. */
+  onUnauthorized?: () => void;
+  /** 403 `troca_de_senha_obrigatoria`: usuário precisa trocar a senha. */
+  onPasswordChangeRequired?: () => void;
+}
+
+let authHandlers: AuthEventHandlers = {};
+
+/** Registrado pelo AuthProvider; chamadores avulsos não precisam usar. */
+export function setAuthEventHandlers(handlers: AuthEventHandlers): void {
+  authHandlers = handlers;
+}
+
+// Nestes endpoints o 401 é um resultado esperado (credenciais erradas /
+// sem sessão), tratado pelo próprio chamador — não dispara o tratamento global.
+const AUTH_PATHS_WITHOUT_GLOBAL_401 = ["/api/auth/login", "/api/auth/me"];
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -13,9 +47,30 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       status?: number;
     };
     err.status = res.status;
+    if (res.status === 401 && !AUTH_PATHS_WITHOUT_GLOBAL_401.includes(path)) {
+      authHandlers.onUnauthorized?.();
+    } else if (res.status === 403 && error.detail === TROCA_SENHA_OBRIGATORIA) {
+      authHandlers.onPasswordChangeRequired?.();
+    }
     throw err;
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+export function login(email: string, senha: string): Promise<Usuario> {
+  return request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, senha }),
+  });
+}
+
+export function logout(): Promise<void> {
+  return request("/api/auth/logout", { method: "POST" });
+}
+
+export function fetchMe(): Promise<Usuario> {
+  return request("/api/auth/me");
 }
 
 // --- Clãs ---

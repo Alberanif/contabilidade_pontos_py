@@ -1,5 +1,6 @@
 
-# A suíte usa TestClient sem credenciais; os testes de auth reativam a proteção.
+# A suíte usa TestClient sem sessão (bypass: get_current_user devolve um admin
+# fictício); test_session_auth.py reativa a proteção real.
 import os as _os
 
 _os.environ.setdefault("APP_AUTH_DISABLED", "true")

@@ -14,8 +14,9 @@ O app é uma única imagem Docker: build do React + FastAPI servindo API (`/api`
 Obrigatórias (o app não sobe sem elas):
 
 ```
-APP_USER=admin
-APP_PASSWORD=<senha forte>
+APP_USER=admin            # e-mail do 1º admin (semeadura)
+APP_PASSWORD=<senha forte>  # senha provisória do 1º admin (troca forçada)
+SESSION_SECRET=<string aleatória longa>
 GOOGLE_SERVICE_ACCOUNT_JSON=<JSON da service account em UMA linha>
 GSHEET_RECORDS_SPREADSHEET_ID=...
 GSHEET_RECORDS_SHEET_NAME=...
@@ -33,7 +34,7 @@ Demais (ver `.env.example`): `GSHEET_RECORDS_PRO_BONO_*`, `GSHEET_DESAFIOS_*`, `
 - Para colocar o JSON da service account em uma linha: `jq -c . service-account.json`.
 
 ## 3. Acesso e verificação
-- Ao abrir o domínio o navegador pede usuário/senha (`APP_USER`/`APP_PASSWORD`).
+- Login por sessão (cookie `HttpOnly`/`Secure`, 7 dias); no 1º acesso use `APP_USER`/`APP_PASSWORD`. Em HTTP puro defina `SESSION_COOKIE_SECURE=false`.
 - `GET /api/health` é público e usado pelo `HEALTHCHECK` do container.
 - Logs: aba **Logs** do serviço no Easypanel.
 
@@ -44,4 +45,4 @@ docker compose up --build   # lê .env da raiz; abre http://localhost:8080
 (No `.env` local defina `APP_PASSWORD`.)
 
 ## 5. Dev local
-Sem Docker, defina `APP_AUTH_DISABLED=true` no `.env` (ou `APP_PASSWORD`) — caso contrário o backend não inicia.
+Sem Docker, defina `APP_AUTH_DISABLED=true` no `.env` (ou `SESSION_SECRET`) — caso contrário o backend não inicia.
